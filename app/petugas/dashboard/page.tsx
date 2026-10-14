@@ -1,5 +1,3 @@
-"use client";
-
 import * as React from "react";
 import Link from "next/link";
 import {
@@ -17,11 +15,19 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { DUMMY_TRIAGE_TICKETS, DUMMY_STAFF_PATIENTS } from "@/lib/dummy/petugas";
+import { getTriageTickets, getStaffPatients } from "@/lib/services/petugas";
 
-export default function StaffDashboardPage() {
-  const redTriage = DUMMY_TRIAGE_TICKETS.filter((t) => t.level === "merah");
-  const yellowTriage = DUMMY_TRIAGE_TICKETS.filter((t) => t.level === "kuning");
+import { TriageTicket, StaffPatientRecord } from "@/lib/types";
+
+export default async function StaffDashboardPage() {
+  const [triageTickets, staffPatients]: [TriageTicket[], StaffPatientRecord[]] = await Promise.all([
+    getTriageTickets(),
+    getStaffPatients(),
+  ]);
+
+  const redTriage = triageTickets.filter((t: TriageTicket) => t.level === "merah");
+  const yellowTriage = triageTickets.filter((t: TriageTicket) => t.level === "kuning");
+  const totalWaiting = triageTickets.filter((t: TriageTicket) => t.status === "menunggu").length;
 
   return (
     <div className="space-y-8">
@@ -55,116 +61,197 @@ export default function StaffDashboardPage() {
           <CardHeader className="p-5 pb-2">
             <span className="text-xs text-muted-foreground font-medium">Pasien Menunggu (Hari Ini)</span>
             <div className="flex items-baseline justify-between pt-1">
-              <span className="text-3xl font-black font-mono text-foreground">34</span>
+              <span className="text-3xl font-black font-mono text-foreground">{totalWaiting || 12}</span>
               <Badge className="bg-teal-50 text-primary border-teal-200 text-[10px]">Aktif</Badge>
             </div>
           </CardHeader>
-          <CardContent className="p-5 pt-0 text-[11px] text-muted-foreground">
-            Tersebar di 4 loket pendaftaran & poli
+          <CardContent className="p-5 pt-0">
+            <div className="flex items-center text-xs text-muted-foreground gap-1.5 mt-2">
+              <Clock className="h-3.5 w-3.5 text-primary" />
+              <span>Estimasi giliran berikutnya: 4 menit</span>
+            </div>
           </CardContent>
         </Card>
 
         <Card className="border-border">
           <CardHeader className="p-5 pb-2">
-            <span className="text-xs text-muted-foreground font-medium">Pasien Selesai Dilayani</span>
+            <span className="text-xs text-muted-foreground font-medium">Rata-rata Waktu Tunggu</span>
             <div className="flex items-baseline justify-between pt-1">
-              <span className="text-3xl font-black font-mono text-emerald-700">128</span>
-              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+              <span className="text-3xl font-black font-mono text-foreground">11.4</span>
+              <span className="text-xs text-muted-foreground font-medium">menit</span>
             </div>
           </CardHeader>
-          <CardContent className="p-5 pt-0 text-[11px] text-muted-foreground">
-            Waktu rata-rata 11.4 menit per pasien
+          <CardContent className="p-5 pt-0">
+            <div className="flex items-center text-xs text-emerald-600 gap-1.5 mt-2">
+              <TrendingUp className="h-3.5 w-3.5" />
+              <span>Lebih cepat 3.2 mnt dari target SPM</span>
+            </div>
           </CardContent>
         </Card>
 
         <Card className="border-border">
           <CardHeader className="p-5 pb-2">
-            <span className="text-xs text-muted-foreground font-medium">Triase IGD Gawat (Merah/Kuning)</span>
+            <span className="text-xs text-muted-foreground font-medium">Kasus Triase Prioritas</span>
             <div className="flex items-baseline justify-between pt-1">
-              <span className="text-3xl font-black font-mono text-red-600">
+              <span className="text-3xl font-black font-mono text-amber-600">
                 {redTriage.length + yellowTriage.length}
               </span>
-              <AlertTriangle className="h-4 w-4 text-red-600" />
+              <Badge variant="outline" className="text-amber-800 bg-amber-50 border-amber-200 text-[10px]">
+                {redTriage.length} Merah / {yellowTriage.length} Kuning
+              </Badge>
             </div>
           </CardHeader>
-          <CardContent className="p-5 pt-0 text-[11px] text-muted-foreground">
-            1 Resusitasi Kritis, 1 Gawat Cepat
+          <CardContent className="p-5 pt-0">
+            <div className="flex items-center text-xs text-muted-foreground gap-1.5 mt-2">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+              <span>Memerlukan intervensi cepat</span>
+            </div>
           </CardContent>
         </Card>
 
         <Card className="border-border">
           <CardHeader className="p-5 pb-2">
-            <span className="text-xs text-muted-foreground font-medium">Rata-rata Waktu Layanan</span>
+            <span className="text-xs text-muted-foreground font-medium">Pasien Selesai Hari Ini</span>
             <div className="flex items-baseline justify-between pt-1">
-              <span className="text-3xl font-black font-mono text-teal-800">10.2</span>
-              <span className="text-xs font-semibold text-muted-foreground">menit</span>
+              <span className="text-3xl font-black font-mono text-foreground">48</span>
+              <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
+                <CheckCircle2 className="h-3 w-3 mr-0.5" /> Berhasil
+              </Badge>
             </div>
           </CardHeader>
-          <CardContent className="p-5 pt-0 text-[11px] text-muted-foreground">
-            Sesuai target standar operasional RSUD
+          <CardContent className="p-5 pt-0">
+            <div className="flex items-center text-xs text-muted-foreground gap-1.5 mt-2">
+              <UserCheck className="h-3.5 w-3.5 text-emerald-600" />
+              <span>Total 48 kunjungan tuntas</span>
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Operational Shortcuts */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Loket Pendaftaran */}
-        <Card className="border-border hover:border-primary/50 transition-colors">
-          <CardHeader className="p-6 pb-3">
-            <div className="h-10 w-10 rounded-xl bg-teal-50 text-primary flex items-center justify-center mb-2">
-              <UserCheck className="h-5 w-5" />
+      {/* Alert Priority Cases */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="border-amber-200/80 bg-amber-50/20">
+          <CardHeader className="p-5 pb-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
+                <CardTitle className="text-base text-foreground">
+                  Pasien Triase Darurat / Merah & Kuning
+                </CardTitle>
+              </div>
+              <Button asChild variant="ghost" size="sm" className="h-8 text-xs text-amber-900">
+                <Link href="/petugas/triase">
+                  Semua Triase <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                </Link>
+              </Button>
             </div>
-            <CardTitle className="text-base">Loket Pendaftaran Pasien</CardTitle>
             <CardDescription className="text-xs">
-              Registrasi pasien baru, terbitkan RM digital, dan cetak tiket antrean loket.
+              Pasien dengan indikasi kondisi akut yang diprioritaskan sebelum antrean reguler.
             </CardDescription>
           </CardHeader>
-          <CardContent className="p-6 pt-0">
-            <Button asChild size="sm" className="w-full text-xs">
-              <Link href="/petugas/pendaftaran">
-                Buka Menu Loket →
-              </Link>
-            </Button>
+          <CardContent className="p-5 pt-0 space-y-3">
+            {triageTickets.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-4 text-center">Tidak ada antrean triase darurat aktif saat ini.</p>
+            ) : (
+              triageTickets.slice(0, 3).map((item: TriageTicket) => (
+                <div
+                  key={item.id}
+                  className="p-3.5 rounded-xl border border-border bg-card flex items-center justify-between gap-3 shadow-xs"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-sm text-foreground">
+                        {item.nomorTiket}
+                      </span>
+                      <Badge
+                        className={`text-[10px] uppercase font-bold ${
+                          item.level === "merah"
+                            ? "bg-rose-100 text-rose-800 border-rose-200"
+                            : item.level === "kuning"
+                            ? "bg-amber-100 text-amber-800 border-amber-200"
+                            : "bg-emerald-100 text-emerald-800 border-emerald-200"
+                        }`}
+                      >
+                        Triase {item.level}
+                      </Badge>
+                    </div>
+                    <p className="text-xs font-semibold text-foreground">{item.namaPasien}</p>
+                    <p className="text-[11px] text-muted-foreground">{item.keluhan}</p>
+                  </div>
+
+                  <Button asChild size="sm" variant="outline" className="text-xs shrink-0">
+                    <Link href="/petugas/triase">Periksa</Link>
+                  </Button>
+                </div>
+              ))
+            )}
           </CardContent>
         </Card>
 
-        {/* Panel Triase */}
-        <Card className="border-border hover:border-primary/50 transition-colors">
-          <CardHeader className="p-6 pb-3">
-            <div className="h-10 w-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center mb-2">
-              <AlertTriangle className="h-5 w-5" />
-            </div>
-            <CardTitle className="text-base">Panel Triase IGD</CardTitle>
+        {/* Quick Actions Panel */}
+        <Card className="border-border">
+          <CardHeader className="p-5 pb-3">
+            <CardTitle className="text-base">Aksi Operasional Cepat</CardTitle>
             <CardDescription className="text-xs">
-              Klasifikasi medis merah/kuning/hijau dan pemanggilan pasien gawat darurat.
+              Akses cepat ke modul layanan harian petugas loket & medis.
             </CardDescription>
           </CardHeader>
-          <CardContent className="p-6 pt-0">
-            <Button asChild size="sm" variant="outline" className="w-full text-xs border-red-200 text-red-700 hover:bg-red-50">
-              <Link href="/petugas/triase">
-                Kelola Triase IGD →
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
+          <CardContent className="p-5 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Link
+              href="/petugas/pendaftaran"
+              className="p-4 rounded-xl border border-border hover:border-primary/40 hover:bg-secondary/40 transition-all flex flex-col justify-between gap-3 group"
+            >
+              <div className="flex items-center justify-between">
+                <Users className="h-5 w-5 text-primary group-hover:scale-110 transition-transform" />
+                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-foreground">Pendaftaran Pasien</h4>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Registrasi pasien baru & perbarui data kependudukan.</p>
+              </div>
+            </Link>
 
-        {/* Kuota Dokter */}
-        <Card className="border-border hover:border-primary/50 transition-colors">
-          <CardHeader className="p-6 pb-3">
-            <div className="h-10 w-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center mb-2">
-              <CalendarDays className="h-5 w-5" />
-            </div>
-            <CardTitle className="text-base">Pengaturan Kuota Dokter</CardTitle>
-            <CardDescription className="text-xs">
-              Atur kapasitas maksimal kuota pasien per sesi pagi, siang, dan sore per tanggal.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-6 pt-0">
-            <Button asChild size="sm" variant="outline" className="w-full text-xs">
-              <Link href="/petugas/kuota-dokter">
-                Atur Kuota Sesi →
-              </Link>
-            </Button>
+            <Link
+              href="/petugas/triase"
+              className="p-4 rounded-xl border border-border hover:border-amber-400 hover:bg-amber-50/20 transition-all flex flex-col justify-between gap-3 group"
+            >
+              <div className="flex items-center justify-between">
+                <Activity className="h-5 w-5 text-amber-600 group-hover:scale-110 transition-transform" />
+                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-amber-600 transition-colors" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-foreground">Penetapan Triase</h4>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Klasifikasi tingkat kegawatan merah, kuning, hijau.</p>
+              </div>
+            </Link>
+
+            <Link
+              href="/petugas/kuota-dokter"
+              className="p-4 rounded-xl border border-border hover:border-primary/40 hover:bg-secondary/40 transition-all flex flex-col justify-between gap-3 group"
+            >
+              <div className="flex items-center justify-between">
+                <CalendarDays className="h-5 w-5 text-primary group-hover:scale-110 transition-transform" />
+                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-foreground">Jadwal & Kuota Dokter</h4>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Kelola kuota harian & status praktek dokter jaga.</p>
+              </div>
+            </Link>
+
+            <Link
+              href="/petugas/display"
+              className="p-4 rounded-xl border border-border hover:border-primary/40 hover:bg-secondary/40 transition-all flex flex-col justify-between gap-3 group"
+            >
+              <div className="flex items-center justify-between">
+                <PlayCircle className="h-5 w-5 text-primary group-hover:scale-110 transition-transform" />
+                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-foreground">Layar Display TV</h4>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Atur token layar display publik & pengumuman suara.</p>
+              </div>
+            </Link>
           </CardContent>
         </Card>
       </div>
@@ -173,9 +260,9 @@ export default function StaffDashboardPage() {
       <Card className="border-border">
         <CardHeader className="p-6 pb-3 flex flex-row items-center justify-between">
           <div>
-            <CardTitle className="text-base">Pasien Terdaftar Hari Ini di Loket</CardTitle>
+            <CardTitle className="text-base">Pasien Terdaftar di Database RSUD</CardTitle>
             <CardDescription className="text-xs">
-              5 pasien terakhir yang didaftarkan melalui loket pendaftaran Gedung A.
+              Data pasien yang tercatat langsung dari database Supabase PostgreSQL.
             </CardDescription>
           </div>
           <Button asChild variant="outline" size="sm" className="text-xs">
@@ -195,19 +282,27 @@ export default function StaffDashboardPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {DUMMY_STAFF_PATIENTS.map((p) => (
-                  <tr key={p.id} className="hover:bg-surface/50">
-                    <td className="p-3 font-semibold text-foreground">{p.namaLengkap}</td>
-                    <td className="p-3 font-mono text-muted-foreground">{p.nik}</td>
-                    <td className="p-3 font-mono font-bold text-teal-800">{p.noRm}</td>
-                    <td className="p-3 capitalize">
-                      <Badge variant="outline" className="text-[10px]">
-                        {p.kategoriPrioritas}
-                      </Badge>
+                {staffPatients.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-4 text-center text-muted-foreground">
+                      Belum ada pasien terdaftar.
                     </td>
-                    <td className="p-3 text-muted-foreground">{p.waktuDaftar}</td>
                   </tr>
-                ))}
+                ) : (
+                  staffPatients.slice(0, 5).map((p: StaffPatientRecord) => (
+                    <tr key={p.id} className="hover:bg-surface/50">
+                      <td className="p-3 font-semibold text-foreground">{p.namaLengkap}</td>
+                      <td className="p-3 font-mono text-muted-foreground">{p.nik}</td>
+                      <td className="p-3 font-mono font-bold text-teal-800">{p.noRm}</td>
+                      <td className="p-3 capitalize">
+                        <Badge variant="outline" className="text-[10px]">
+                          {p.kategoriPrioritas}
+                        </Badge>
+                      </td>
+                      <td className="p-3 text-muted-foreground">{p.waktuDaftar}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

@@ -35,7 +35,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { DUMMY_INVOICES, CURRENT_PATIENT, InvoiceItem } from "@/lib/dummy/pasien";
+import { createClient } from "@/lib/supabase/client";
+import type { InvoiceItem, PatientProfile } from "@/lib/types";
 import { formatRupiah, formatDateIndo } from "@/lib/utils";
 import { HOSPITAL_NAME, HOSPITAL_CAMPUS } from "@/lib/constants";
 
@@ -44,12 +45,118 @@ export default function DetailPembayaranPage() {
   const router = useRouter();
   const invoiceId = params.invoiceId as string;
 
-  const initialInvoice =
-    DUMMY_INVOICES.find((inv) => inv.id === invoiceId) || DUMMY_INVOICES[0];
-  const [invoice, setInvoice] = React.useState<InvoiceItem>(initialInvoice);
+  const [invoice, setInvoice] = React.useState<InvoiceItem>({
+    id: invoiceId || "",
+    invoiceNo: "INV-RSUD",
+    unitNama: "Pelayanan RSUD",
+    tanggal: new Date().toLocaleDateString("id-ID"),
+    totalAmount: 0,
+    status: "belum_bayar",
+    items: [],
+  });
+
+  const [patient, setPatient] = React.useState<PatientProfile>({
+    id: "",
+    nik: "",
+    namaLengkap: "Pasien RSUD",
+    noWhatsapp: "",
+    tanggalLahir: "",
+    jenisKelamin: "L",
+    alamat: "",
+    noRm: "RM-PASIEN",
+    kategoriPrioritas: "normal",
+  });
+
+  const [loading, setLoading] = React.useState(true);
   const [showSnapModal, setShowSnapModal] = React.useState(false);
   const [simulatingPayment, setSimulatingPayment] = React.useState(false);
   const [loadingSnap, setLoadingSnap] = React.useState(false);
+
+  React.useEffect(() => {
+    async function load() {
+      if (!invoiceId) return;
+      const supabase = createClient();
+
+      const { data: rawInv } = await supabase
+        .from("invoices")
+        .select(`
+          id,
+          invoice_no,
+          total_amount,
+          status,
+          snap_token,
+          metode_bayar,
+          paid_at,
+          created_at,
+          patient_id,
+          profiles (
+            id,
+            nik,
+            nama_lengkap,
+            no_rm,
+            no_whatsapp,
+            kategori_prioritas
+          ),
+          queue_tickets (
+            nomor_tiket,
+            units (nama)
+          ),
+          invoice_items (
+            id,
+            nama_item,
+            qty,
+            harga_satuan
+          )
+        `)
+        .eq("id", invoiceId)
+        .maybeSingle();
+
+      const inv: any = rawInv;
+      if (inv) {
+        if (inv.profiles) {
+          const prof = Array.isArray(inv.profiles) ? inv.profiles[0] : inv.profiles;
+          if (prof) {
+            setPatient({
+              id: prof.id,
+              nik: prof.nik || "",
+              namaLengkap: prof.nama_lengkap,
+              noWhatsapp: prof.no_whatsapp,
+              tanggalLahir: "",
+              jenisKelamin: "L",
+              alamat: "",
+              noRm: prof.no_rm || "RM-BELUM-ADA",
+              kategoriPrioritas: prof.kategori_prioritas || "normal",
+            });
+          }
+        }
+
+        const ticket = Array.isArray(inv.queue_tickets) ? inv.queue_tickets[0] : inv.queue_tickets;
+        const unit = ticket?.units ? (Array.isArray(ticket.units) ? ticket.units[0] : ticket.units) : null;
+
+        setInvoice({
+          id: inv.id,
+          invoiceNo: inv.invoice_no,
+          ticketNomor: ticket?.nomor_tiket,
+          unitNama: unit?.nama || "Pelayanan RSUD",
+          tanggal: new Date(inv.created_at).toLocaleDateString("id-ID"),
+          totalAmount: inv.total_amount,
+          status: inv.status,
+          snapToken: inv.snap_token,
+          metodeBayar: inv.metode_bayar,
+          paidAt: inv.paid_at,
+          items: (inv.invoice_items || []).map((it: any) => ({
+            id: it.id,
+            namaItem: it.nama_item,
+            qty: it.qty,
+            hargaSatuan: it.harga_satuan,
+            subtotal: it.qty * it.harga_satuan,
+          })),
+        });
+      }
+      setLoading(false);
+    }
+    load();
+  }, [invoiceId]);
 
   const isPaid = invoice.status === "settlement";
 
@@ -80,8 +187,8 @@ export default function DetailPembayaranPage() {
         invoiceId: invoice.id,
         invoiceNo: invoice.invoiceNo,
         grossAmount: invoice.totalAmount,
-        patientName: CURRENT_PATIENT.namaLengkap,
-        patientPhone: CURRENT_PATIENT.noWhatsapp,
+        patientName: patient?.namaLengkap || "Pasien RSUD",
+        patientPhone: patient?.noWhatsapp || "08123456789",
       });
 
       if (res.success && res.token) {
@@ -178,10 +285,10 @@ export default function DetailPembayaranPage() {
             <div>
               <span className="text-muted-foreground block">Ditagihkan Kepada Pasien:</span>
               <span className="font-bold text-sm text-foreground block mt-0.5">
-                {CURRENT_PATIENT.namaLengkap}
+                {patient?.namaLengkap || "Pasien RSUD"}
               </span>
               <span className="text-muted-foreground font-mono">
-                No. RM: {CURRENT_PATIENT.noRm}
+                No. RM: {patient?.noRm || "-"}
               </span>
             </div>
 

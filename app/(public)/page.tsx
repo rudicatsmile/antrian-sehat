@@ -18,8 +18,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { DUMMY_LAYANAN } from "@/lib/dummy/layanan";
-import { DUMMY_DOKTER } from "@/lib/dummy/dokter";
+import { getLayananList } from "@/lib/services/layanan";
+import { getDokterList } from "@/lib/services/dokter";
 import { APP_NAME, HOSPITAL_NAME, HOSPITAL_TAGLINE, BUILDINGS } from "@/lib/constants";
 
 export const metadata: Metadata = {
@@ -27,8 +27,10 @@ export const metadata: Metadata = {
   description: "Daftar antrean rumah sakit online, pantau estimasi waktu tunggu real-time, dan terima notifikasi WhatsApp di RSUD Sejahtera Sehat.",
 };
 
-export default function HomePage() {
-  const featuredUnits = DUMMY_LAYANAN.slice(0, 6);
+export default async function HomePage() {
+  const units = await getLayananList();
+  const featuredUnits = units.slice(0, 6);
+  const doctors = await getDokterList();
 
   return (
     <div className="flex flex-col gap-16 pb-20">
@@ -233,7 +235,7 @@ export default function HomePage() {
           </div>
           <Button variant="outline" asChild className="self-start sm:self-auto gap-2 text-xs">
             <Link href="/layanan">
-              Lihat Semua Unit ({DUMMY_LAYANAN.length})
+              Lihat Semua Unit ({units.length})
               <ChevronRight className="h-4 w-4" />
             </Link>
           </Button>
@@ -300,9 +302,15 @@ export default function HomePage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {DUMMY_DOKTER.map((doc) => {
-              const activeSession = doc.sessions[0];
-              const sisaKuota = activeSession.kuota - activeSession.terpakai;
+            {doctors.map((doc) => {
+              const activeSession = doc.sessions[0] || {
+                sesi: "pagi",
+                kuota: 30,
+                terpakai: 0,
+                jamMulai: "08:00",
+                jamSelesai: "12:00",
+              };
+              const sisaKuota = Math.max(0, activeSession.kuota - activeSession.terpakai);
               return (
                 <Card key={doc.id} className="overflow-hidden">
                   <div className="p-5 space-y-3">

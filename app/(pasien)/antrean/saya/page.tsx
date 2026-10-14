@@ -15,20 +15,93 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { DUMMY_ACTIVE_TICKETS, QueueTicketItem } from "@/lib/dummy/pasien";
+import { createClient } from "@/lib/supabase/client";
+import type { QueueTicketItem } from "@/lib/types";
 
 export default function AntreanSayaPage() {
-  const [tickets, setTickets] = React.useState<QueueTicketItem[]>(DUMMY_ACTIVE_TICKETS);
+  const [tickets, setTickets] = React.useState<QueueTicketItem[]>([]);
+  const [loading, setLoading] = React.useState(true);
   const [cancelModalTicket, setCancelModalTicket] = React.useState<QueueTicketItem | null>(null);
   const [canceling, setCanceling] = React.useState(false);
 
-  // Polling fallback every 5 seconds for live status updates
   React.useEffect(() => {
-    const timer = setInterval(() => {
-      // In production/Supabase, fetch latest ticket status or listen to Supabase realtime
-      setTickets((prev) => [...prev]);
-    }, 5000);
-    return () => clearInterval(timer);
+    const supabase = createClient();
+
+    async function loadTickets() {
+      const { data: { user } } = await supabase.auth.getUser();
+      let query = supabase
+        .from("queue_tickets")
+        .select(`
+          id,
+          nomor_tiket,
+          tanggal,
+          status,
+          urutan,
+          prioritas,
+          triage,
+          estimasi_menit,
+          created_at,
+          units (
+            nama,
+            slug,
+            lantai,
+            buildings (nama)
+          ),
+          doctor_sessions (
+            sesi,
+            doctors (nama)
+          )
+        `)
+        .in("status", ["menunggu", "dipanggil", "dilayani"])
+        .order("created_at", { ascending: false });
+
+      if (user) {
+        query = query.eq("patient_id", user.id);
+      }
+
+      const { data } = await query;
+      if (data) {
+        setTickets(
+          data.map((t: any) => ({
+            id: t.id,
+            nomorTiket: t.nomor_tiket,
+            unitSlug: t.units?.slug || "poliklinik",
+            unitNama: t.units?.nama || "Poliklinik",
+            buildingNama: t.units?.buildings?.nama || "Gedung Utama",
+            ruangLokasi: t.units?.lantai || "Lantai 1",
+            dokterNama: t.doctor_sessions?.doctors?.nama,
+            sesiNama: t.doctor_sessions?.sesi ? `Sesi ${t.doctor_sessions.sesi}` : undefined,
+            tanggal: t.tanggal,
+            waktuBooking: new Date(t.created_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
+            status: t.status,
+            urutan: t.urutan,
+            sisaAntreanDiDepan: Math.max(0, t.urutan - 1),
+            estimasiMenit: t.estimasi_menit || 15,
+            qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(t.nomor_tiket)}`,
+            prioritas: t.prioritas,
+            triageLevel: t.triage,
+            timeline: [],
+          }))
+        );
+      }
+      setLoading(false);
+    }
+
+    loadTickets();
+
+    const channel = supabase
+      .channel("patient_queue_tickets")
+      .on("postgres_changes", { event: "*", schema: "public", table: "queue_tickets" }, () => {
+        loadTickets();
+      })
+      .subscribe();
+
+    const interval = setInterval(loadTickets, 5000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+    };
   }, []);
 
   const handleCancelTicket = async () => {

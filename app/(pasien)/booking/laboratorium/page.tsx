@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { CURRENT_PATIENT } from "@/lib/dummy/pasien";
+import { createClient } from "@/lib/supabase/client";
 
 interface LabTestOption {
   id: string;
@@ -31,7 +31,7 @@ const LAB_TESTS: LabTestOption[] = [
 export default function BookingLaboratoriumPage() {
   const router = useRouter();
   const [selectedTests, setSelectedTests] = React.useState<string[]>(["hematologi"]);
-  const [tanggal, setTanggal] = React.useState("2026-10-15");
+  const [tanggal, setTanggal] = React.useState(() => new Date().toISOString().split("T")[0]);
   const [jamKedatangan, setJamKedatangan] = React.useState("07:30");
   const [loading, setLoading] = React.useState(false);
 
@@ -51,14 +51,51 @@ export default function BookingLaboratoriumPage() {
     (testId) => LAB_TESTS.find((t) => t.id === testId)?.wajibPuasa
   );
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => {
+
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+
+      let patientId: string = user?.id || "";
+      if (!patientId) {
+        const { data: firstP } = await supabase.from("profiles").select("id").limit(1).maybeSingle();
+        patientId = firstP?.id || "patient-1";
+      }
+
+      // Find laboratory unit
+      const { data: labUnit } = await supabase
+        .from("units")
+        .select("id")
+        .eq("kind", "laboratorium")
+        .maybeSingle();
+
+      if (!labUnit) {
+        toast.error("Unit laboratorium tidak ditemukan di database.");
+        return;
+      }
+
+      const { createBooking } = await import("@/app/actions/booking");
+      const res = await createBooking({
+        patientId,
+        unitId: labUnit.id,
+        unitKind: "laboratorium",
+        bookingDate: tanggal,
+      });
+
+      if (res.success) {
+        toast.success(res.message || `Booking Laboratorium Berhasil! Tiket: ${res.ticket?.nomor_tiket}.`);
+        router.push("/antrean/saya");
+      } else {
+        toast.error(res.error || "Gagal booking laboratorium.");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Gagal booking laboratorium.");
+    } finally {
       setLoading(false);
-      toast.success("Booking Laboratorium Berhasil! Tiket LAB-028 diterbitkan. Konfirmasi dikirim via WhatsApp.");
-      router.push("/antrean/saya");
-    }, 800);
+    }
   };
 
   return (

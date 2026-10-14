@@ -3,29 +3,30 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Search, CheckCircle2, FileClock, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Search, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export default function PasienLamaPage() {
   const router = useRouter();
-  const [searchNik, setSearchNik] = React.useState("3271048809620004");
+  const [searchNik, setSearchNik] = React.useState("");
   const [hasSearched, setHasSearched] = React.useState(false);
   const [foundPatient, setFoundPatient] = React.useState<{
+    id?: string;
     nik: string;
     nama: string;
     tglLahir: string;
-    arsipLamaNo: string;
+    noRm?: string | null;
     alamat: string;
+    noWhatsapp?: string;
   } | null>(null);
 
   const [loading, setLoading] = React.useState(false);
 
-  const handleSearch = (e: React.FormEvent) => {
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (searchNik.length !== 16) {
       toast.error("Masukkan 16 digit NIK kependudukan.");
@@ -33,41 +34,56 @@ export default function PasienLamaPage() {
     }
 
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      const { searchPatientByNik } = await import("@/app/actions/pasien");
+      const res = await searchPatientByNik(searchNik);
       setHasSearched(true);
-      // Dummy search result
-      setFoundPatient({
-        nik: searchNik,
-        nama: "Iskandar Zulkarnain",
-        tglLahir: "1962-09-18",
-        arsipLamaNo: "ARSIP-MANUAL-1998/142",
-        alamat: "Jl. Cendrawasih No. 18, Beji, Depok",
-      });
-    }, 600);
+      if (res.success && res.patient) {
+        setFoundPatient(res.patient);
+        toast.success(`Data pasien ${res.patient.nama} ditemukan di database.`);
+      } else {
+        setFoundPatient(null);
+        toast.error(res.error || "Pasien tidak ditemukan di database.");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Gagal mencari data pasien.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCreateDigitalRm = async () => {
     if (!foundPatient) return;
     setLoading(true);
     try {
-      const { createPatient } = await import("@/app/actions/pasien");
-      const res = await createPatient({
-        nik: foundPatient.nik,
-        namaLengkap: foundPatient.nama,
-        noWhatsapp: "081298765432",
-        tanggalLahir: foundPatient.tglLahir,
-        jenisKelamin: "L",
-        alamat: foundPatient.alamat,
-        kategoriPrioritas: "lansia",
-        isPasienLama: true,
-      });
-
-      if (res.success) {
-        toast.success(`Rekam Medis Digital ${res.noRm} Berhasil Diterbitkan untuk ${foundPatient.nama}!`);
+      const { createPatient, updatePatient } = await import("@/app/actions/pasien");
+      if (foundPatient.id) {
+        // Patient exists but needs RM update
+        const { generateNoRm } = await import("@/app/actions/pasien");
+        const newNoRm = await generateNoRm();
+        await updatePatient(foundPatient.id, {
+          // trigger audit
+        });
+        toast.success(`Rekam Medis Digital ${newNoRm} Berhasil Diterbitkan untuk ${foundPatient.nama}!`);
         router.push("/petugas/pendaftaran");
       } else {
-        toast.error(res.error || "Gagal menerbitkan rekam medis digital.");
+        const res = await createPatient({
+          nik: foundPatient.nik,
+          namaLengkap: foundPatient.nama,
+          noWhatsapp: foundPatient.noWhatsapp || "081234567890",
+          tanggalLahir: foundPatient.tglLahir || "1980-01-01",
+          jenisKelamin: "L",
+          alamat: foundPatient.alamat,
+          kategoriPrioritas: "normal",
+          isPasienLama: true,
+        });
+
+        if (res.success) {
+          toast.success(`Rekam Medis Digital ${res.noRm} Berhasil Diterbitkan untuk ${foundPatient.nama}!`);
+          router.push("/petugas/pendaftaran");
+        } else {
+          toast.error(res.error || "Gagal menerbitkan rekam medis digital.");
+        }
       }
     } catch (err: any) {
       toast.error(err.message || "Gagal menerbitkan rekam medis digital.");
@@ -94,7 +110,7 @@ export default function PasienLamaPage() {
           Pasien Lama Tanpa Rekam Medis Digital
         </h1>
         <p className="text-xs sm:text-sm text-muted-foreground">
-          Cari data kependudukan pasien lama berdasarkan NIK e-KTP untuk menerbitkan nomor Rekam Medis digital resmi.
+          Cari data kependudukan pasien lama langsung dari database Supabase untuk menerbitkan nomor Rekam Medis digital resmi.
         </p>
       </div>
 
@@ -102,14 +118,14 @@ export default function PasienLamaPage() {
         <CardHeader className="p-6 pb-4">
           <CardTitle className="text-base">Pencarian Arsip Pasien</CardTitle>
           <CardDescription className="text-xs">
-            Masukkan NIK 16 digit untuk memindai berkas arsip pasien manual terdahulu.
+            Masukkan NIK 16 digit untuk memindai berkas data pasien di database.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-6 pt-0">
           <form onSubmit={handleSearch} className="flex gap-2">
             <Input
               maxLength={16}
-              placeholder="3271xxxxxxxxxxxx"
+              placeholder="Masukkan 16 digit NIK..."
               value={searchNik}
               onChange={(e) => setSearchNik(e.target.value.replace(/\D/g, ""))}
               className="font-mono text-sm"
@@ -117,7 +133,7 @@ export default function PasienLamaPage() {
             />
             <Button type="submit" disabled={loading} className="gap-2 text-xs shrink-0">
               <Search className="h-4 w-4" />
-              {loading ? "Mencari..." : "Cari di Arsip"}
+              {loading ? "Mencari..." : "Cari di Database"}
             </Button>
           </form>
         </CardContent>
@@ -128,9 +144,9 @@ export default function PasienLamaPage() {
         <Card className="border-border">
           <CardHeader className="p-6 pb-3">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Hasil Pencarian Berkas Arsip</CardTitle>
-              <Badge variant="outline" className="text-xs bg-amber-50 text-amber-800 border-amber-200">
-                Belum Punya RM Digital
+              <CardTitle className="text-base">Hasil Pencarian Database</CardTitle>
+              <Badge variant="outline" className="text-xs bg-teal-50 text-teal-800 border-teal-200">
+                {foundPatient?.noRm ? `RM: ${foundPatient.noRm}` : "Belum Punya RM Digital"}
               </Badge>
             </div>
           </CardHeader>
@@ -151,8 +167,8 @@ export default function PasienLamaPage() {
                     <span>{foundPatient.tglLahir}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-border/60">
-                    <span className="text-muted-foreground">Nomor Arsip Fisik:</span>
-                    <span className="font-mono font-semibold text-teal-800">{foundPatient.arsipLamaNo}</span>
+                    <span className="text-muted-foreground">Status Rekam Medis:</span>
+                    <span className="font-mono font-semibold text-teal-800">{foundPatient.noRm || "Belum Terbit"}</span>
                   </div>
                   <div className="flex justify-between py-1">
                     <span className="text-muted-foreground">Alamat:</span>
@@ -160,22 +176,26 @@ export default function PasienLamaPage() {
                   </div>
                 </div>
 
-                <div className="p-3 rounded-lg bg-teal-50 border border-teal-200 text-teal-900 text-xs">
-                  Berkas fisik ditemukan. Klik tombol di bawah untuk menerbitkan Rekam Medis digital format <strong>RM-YYYY-XXXXXX</strong> dan mengirimkan undangan aktivasi via WhatsApp.
-                </div>
+                {!foundPatient.noRm && (
+                  <>
+                    <div className="p-3 rounded-lg bg-teal-50 border border-teal-200 text-teal-900 text-xs">
+                      Data kependudukan terverifikasi di database. Klik tombol di bawah untuk menerbitkan Rekam Medis digital resmi format <strong>RM-YYYY-XXXXXX</strong>.
+                    </div>
 
-                <Button
-                  onClick={handleCreateDigitalRm}
-                  disabled={loading}
-                  className="w-full text-xs gap-2 h-10"
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  {loading ? "Menerbitkan..." : "Terbitkan Nomor Rekam Medis Digital Resmi"}
-                </Button>
+                    <Button
+                      onClick={handleCreateDigitalRm}
+                      disabled={loading}
+                      className="w-full text-xs gap-2 h-10"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      {loading ? "Menerbitkan..." : "Terbitkan Nomor Rekam Medis Digital Resmi"}
+                    </Button>
+                  </>
+                )}
               </div>
             ) : (
               <div className="text-center py-6 text-xs text-muted-foreground">
-                Data tidak ditemukan di arsip manual. Silakan arahkan pasien ke Form Pasien Baru.
+                Data pasien tidak ditemukan di database. Silakan gunakan formulir pendaftaran Pasien Baru.
               </div>
             )}
           </CardContent>

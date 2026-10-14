@@ -15,8 +15,8 @@ import { APP_NAME, HOSPITAL_NAME } from "@/lib/constants";
 export default function MasukPage() {
   const router = useRouter();
   const [step, setStep] = React.useState<"input" | "otp">("input");
-  const [nik, setNik] = React.useState("3271041508560002"); // default dummy Budi Santoso
-  const [noWhatsapp, setNoWhatsapp] = React.useState("081298765432");
+  const [nik, setNik] = React.useState("");
+  const [noWhatsapp, setNoWhatsapp] = React.useState("");
   const [otp, setOtp] = React.useState("");
   const [timer, setTimer] = React.useState(60);
   const [loading, setLoading] = React.useState(false);
@@ -163,7 +163,7 @@ export default function MasukPage() {
               <div className="p-3 rounded-lg bg-teal-50 border border-teal-200 text-xs text-teal-900 flex items-start gap-2">
                 <ShieldCheck className="h-4 w-4 text-primary shrink-0 mt-0.5" />
                 <span>
-                  Simulasi Prototipe: Data dummy Budi Santoso (Lansia) telah terisi otomatis untuk pengujian cepat.
+                  Otentikasi aman berbasis OTP WhatsApp terhubung langsung ke layanan Supabase Auth & PostgreSQL.
                 </span>
               </div>
 

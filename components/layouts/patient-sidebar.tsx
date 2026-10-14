@@ -19,7 +19,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
-import { CURRENT_PATIENT } from "@/lib/dummy/pasien";
+import { createClient } from "@/lib/supabase/client";
+import type { PatientProfile } from "@/lib/types";
 import { APP_NAME, HOSPITAL_NAME } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +35,41 @@ const PATIENT_NAV = [
 
 export function PatientSidebar() {
   const pathname = usePathname();
+  const [profile, setProfile] = React.useState<PatientProfile>({
+    id: "",
+    nik: "",
+    namaLengkap: "Pasien RSUD",
+    noWhatsapp: "",
+    tanggalLahir: "",
+    jenisKelamin: "L",
+    alamat: "",
+    noRm: "RM-PASIEN",
+    kategoriPrioritas: "normal",
+  });
+
+  React.useEffect(() => {
+    async function fetchUser() {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+        if (data) {
+          setProfile({
+            id: data.id,
+            nik: data.nik || "",
+            namaLengkap: data.nama_lengkap || "Pasien",
+            noWhatsapp: data.no_whatsapp || "",
+            tanggalLahir: data.tanggal_lahir || "",
+            jenisKelamin: data.jenis_kelamin || "L",
+            alamat: data.alamat || "",
+            noRm: data.no_rm || "RM-BELUM-ADA",
+            kategoriPrioritas: data.kategori_prioritas || "normal",
+          });
+        }
+      }
+    }
+    fetchUser();
+  }, []);
 
   return (
     <aside className="hidden lg:flex w-64 flex-col border-r border-border bg-card shrink-0 min-h-screen">
@@ -52,21 +88,21 @@ export function PatientSidebar() {
       <div className="p-4 mx-3 my-3 rounded-xl bg-surface border border-border">
         <div className="flex items-center gap-2.5 mb-2">
           <div className="h-9 w-9 rounded-full bg-teal-100 text-teal-800 font-bold text-sm flex items-center justify-center border border-teal-200">
-            {CURRENT_PATIENT.namaLengkap.slice(0, 2).toUpperCase()}
+            {profile.namaLengkap.slice(0, 2).toUpperCase()}
           </div>
           <div className="overflow-hidden">
             <h4 className="font-heading font-semibold text-sm truncate text-foreground">
-              {CURRENT_PATIENT.namaLengkap}
+              {profile.namaLengkap}
             </h4>
             <p className="text-[11px] text-muted-foreground font-mono truncate">
-              {CURRENT_PATIENT.noRm}
+              {profile.noRm}
             </p>
           </div>
         </div>
         <div className="flex items-center justify-between text-xs pt-2 border-t border-border/80">
           <span className="text-muted-foreground text-[11px]">Prioritas:</span>
-          <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200 py-0">
-            Lansia (68 Thn)
+          <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200 py-0 capitalize">
+            {profile.kategoriPrioritas}
           </Badge>
         </div>
       </div>
@@ -110,6 +146,23 @@ export function PatientSidebar() {
 export function PatientMobileNav() {
   const pathname = usePathname();
   const [open, setOpen] = React.useState(false);
+  const [nama, setNama] = React.useState("Pasien");
+  const [noRm, setNoRm] = React.useState("RM-PASIEN");
+
+  React.useEffect(() => {
+    async function load() {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data } = await supabase.from("profiles").select("nama_lengkap, no_rm").eq("id", user.id).maybeSingle();
+        if (data) {
+          if (data.nama_lengkap) setNama(data.nama_lengkap);
+          if (data.no_rm) setNoRm(data.no_rm);
+        }
+      }
+    }
+    load();
+  }, []);
 
   return (
     <div className="lg:hidden sticky top-0 z-40 flex h-14 items-center justify-between border-b border-border bg-background px-4">
@@ -122,7 +175,7 @@ export function PatientMobileNav() {
 
       <div className="flex items-center gap-2">
         <Badge variant="outline" className="text-[11px] bg-blue-50 text-blue-700 border-blue-200">
-          {CURRENT_PATIENT.namaLengkap.split(" ")[0]}
+          {nama.split(" ")[0]}
         </Badge>
         <Sheet open={open} onOpenChange={setOpen}>
           <SheetTrigger asChild>
@@ -138,8 +191,8 @@ export function PatientMobileNav() {
                   <Activity className="h-4 w-4" />
                 </div>
                 <div>
-                  <SheetTitle className="text-sm font-bold">{CURRENT_PATIENT.namaLengkap}</SheetTitle>
-                  <p className="text-xs text-muted-foreground font-mono">{CURRENT_PATIENT.noRm}</p>
+                  <SheetTitle className="text-sm font-bold">{nama}</SheetTitle>
+                  <p className="text-xs text-muted-foreground font-mono">{noRm}</p>
                 </div>
               </div>
             </SheetHeader>

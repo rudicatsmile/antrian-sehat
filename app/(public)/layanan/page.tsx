@@ -7,14 +7,55 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { DUMMY_LAYANAN, UnitLayanan } from "@/lib/dummy/layanan";
+import { createClient } from "@/lib/supabase/client";
+import type { UnitLayanan } from "@/lib/types";
 import { BUILDINGS } from "@/lib/constants";
 
 export default function LayananPage() {
+  const [units, setUnits] = React.useState<UnitLayanan[]>([]);
+  const [loading, setLoading] = React.useState(true);
   const [search, setSearch] = React.useState("");
   const [selectedBuilding, setSelectedBuilding] = React.useState<string>("all");
 
-  const filteredUnits = DUMMY_LAYANAN.filter((unit) => {
+  React.useEffect(() => {
+    async function load() {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("units")
+        .select("*, buildings(*)")
+        .eq("is_active", true)
+        .order("kode", { ascending: true });
+
+      if (data) {
+        setUnits(
+          data.map((u: any) => ({
+            id: u.id,
+            kode: u.kode,
+            nama: u.nama,
+            slug: u.slug,
+            buildingId: u.building_id,
+            buildingName: u.buildings?.nama ? `${u.buildings.nama} (${u.buildings.kode})` : "Gedung Utama",
+            lantai: u.lantai || "Lantai 1",
+            kind: u.kind,
+            deskripsi: `Layanan pemeriksaan dan perawatan ${u.nama} RSUD Sejahtera Sehat.`,
+            jamBuka: u.jam_buka ? u.jam_buka.slice(0, 5) : "08:00",
+            jamTutup: u.jam_tutup ? u.jam_tutup.slice(0, 5) : "15:00",
+            defaultServiceMinutes: u.default_service_minutes || 10,
+            persyaratan: ["KTP asli / Kartu Keluarga", "Nomor WhatsApp aktif"],
+            estimasiTungguMenit: u.default_service_minutes || 10,
+            sisaKuotaHariIni: 75,
+            totalKuotaHariIni: 100,
+            loketAktif: 2,
+            isActive: u.is_active,
+          }))
+        );
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
+  const filteredUnits = units.filter((unit) => {
     const matchSearch =
       unit.nama.toLowerCase().includes(search.toLowerCase()) ||
       unit.kode.toLowerCase().includes(search.toLowerCase()) ||

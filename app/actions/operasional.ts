@@ -8,37 +8,24 @@ import { revalidatePath } from "next/cache";
  */
 export async function createInpatientRequest(payload: {
   patientId: string;
-  unitId?: string;
-  kelasKamar: "VIP" | "Kelas 1" | "Kelas 2" | "Kelas 3" | "ICU" | "NICU";
-  diagnosis?: string;
-  catatan?: string;
+  kelasKamar: "VIP" | "Kelas 1" | "Kelas 2" | "Kelas 3";
+  indikasi: string;
+  isPreOp?: boolean;
+  jenisTindakan?: string;
+  estimasiTanggal?: string;
 }) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Permintaan rawat inap berhasil didaftarkan ke waiting list (Mode Simulasi).",
-        request: {
-          id: "mock-inpatient-" + Date.now(),
-          status: "menunggu_kamar",
-          kelas_kamar: payload.kelasKamar,
-        },
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     const { data: request, error: insertError } = await serviceSupabase
       .from("inpatient_requests")
       .insert({
         patient_id: payload.patientId,
-        unit_id: payload.unitId || null,
-        kelas_kamar: payload.kelasKamar,
-        diagnosis: payload.diagnosis || null,
-        catatan: payload.catatan || null,
+        kelas_diminta: payload.kelasKamar,
+        indikasi: payload.indikasi || "Perawatan rawat inap",
+        is_pre_op: payload.isPreOp || false,
+        jenis_tindakan: payload.jenisTindakan || null,
+        estimasi_tanggal: payload.estimasiTanggal || null,
         status: "menunggu_kamar",
       })
       .select()
@@ -66,22 +53,12 @@ export async function createInpatientRequest(payload: {
  */
 export async function assignRoom(requestId: string, roomId: string, staffId?: string) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Penempatan pasien ke kamar rawat inap berhasil (Mode Simulasi).",
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     // 1. Check room capacity
     const { data: room, error: roomError } = await serviceSupabase
       .from("rooms")
-      .select("id, nama_kamar, kapasitas, terisi, is_active")
+      .select("id, nama_kamar, kapasitas, terisi")
       .eq("id", roomId)
       .single();
 
@@ -89,7 +66,7 @@ export async function assignRoom(requestId: string, roomId: string, staffId?: st
       return { success: false, error: "Data kamar tidak ditemukan." };
     }
 
-    if (!room.is_active || room.terisi >= room.kapasitas) {
+    if (room.terisi >= room.kapasitas) {
       return {
         success: false,
         error: `Kamar ${room.nama_kamar} sudah penuh (${room.terisi}/${room.kapasitas} bed terisi). Silakan pilih kamar lain yang masih tersedia.`,
@@ -114,7 +91,6 @@ export async function assignRoom(requestId: string, roomId: string, staffId?: st
       .update({
         room_id: roomId,
         status: "dirawat",
-        masuk_pada: new Date().toISOString(),
       })
       .eq("id", requestId);
 
@@ -141,36 +117,19 @@ export async function assignRoom(requestId: string, roomId: string, staffId?: st
 export async function createInvoice(payload: {
   patientId: string;
   ticketId?: string;
-  items: { deskripsi: string; kuantitas: number; harga_satuan: number }[];
+  items: { namaItem: string; qty: number; hargaSatuan: number }[];
 }) {
   try {
     if (!payload.items || payload.items.length === 0) {
       return { success: false, error: "Tagihan harus memiliki minimal 1 rincian item layanan/obat." };
     }
 
-    const totalAmount = payload.items.reduce((sum, item) => sum + item.kuantitas * item.harga_satuan, 0);
+    const totalAmount = payload.items.reduce((sum, item) => sum + item.qty * item.hargaSatuan, 0);
 
     const now = new Date();
     const ymd = now.toISOString().slice(0, 10).replace(/-/g, "");
     const randSuffix = Math.floor(1000 + Math.random() * 9000).toString();
     const invoiceNumber = `INV-${ymd}-${randSuffix}`;
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Invoice berhasil diterbitkan (Mode Simulasi).",
-        invoice: {
-          id: "mock-inv-" + Date.now(),
-          nomor_invoice: invoiceNumber,
-          total_amount: totalAmount,
-          status: "belum_bayar",
-          items: payload.items,
-        },
-      };
-    }
 
     const serviceSupabase = createServiceRoleClient();
 
@@ -182,7 +141,7 @@ export async function createInvoice(payload: {
         id: invoiceId,
         patient_id: payload.patientId,
         ticket_id: payload.ticketId || null,
-        nomor_invoice: invoiceNumber,
+        invoice_no: invoiceNumber,
         total_amount: totalAmount,
         status: "belum_bayar",
       })
@@ -196,10 +155,9 @@ export async function createInvoice(payload: {
     // 2. Insert itemized rows
     const itemRows = payload.items.map((it) => ({
       invoice_id: invoiceId,
-      deskripsi: it.deskripsi,
-      kuantitas: it.kuantitas,
-      harga_satuan: it.harga_satuan,
-      subtotal: it.kuantitas * it.harga_satuan,
+      nama_item: it.namaItem,
+      qty: it.qty,
+      harga_satuan: it.hargaSatuan,
     }));
 
     await serviceSupabase.from("invoice_items").insert(itemRows);
@@ -227,17 +185,6 @@ export async function recordCashPayment(payload: {
   jumlahBayar: number;
 }) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Pembayaran tunai berhasil dicatat dan kuitansi lunas diterbitkan (Mode Simulasi).",
-        kembalian: Math.max(0, payload.jumlahBayar - 150000),
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     // 1. Fetch invoice
@@ -274,7 +221,7 @@ export async function recordCashPayment(payload: {
       .from("invoices")
       .update({
         status: "settlement",
-        payment_type: "cash",
+        metode_bayar: "tunai",
         paid_at: nowIso,
       })
       .eq("id", payload.invoiceId);
@@ -289,7 +236,7 @@ export async function recordCashPayment(payload: {
 
     return {
       success: true,
-      message: `Pembayaran tunai untuk ${invoice.nomor_invoice} berhasil dicatat. Kembalian: Rp ${kembalian.toLocaleString("id-ID")}.`,
+      message: `Pembayaran tunai untuk ${invoice.invoice_no} berhasil dicatat. Kembalian: Rp ${kembalian.toLocaleString("id-ID")}.`,
       kembalian,
     };
   } catch (err: any) {
@@ -305,27 +252,10 @@ export async function createDisplayScreen(payload: {
   buildingId: string;
   nama: string;
   mode: "antrean" | "info" | "bergantian";
-  customText?: string;
+  pengumuman?: string;
 }) {
   try {
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Layar display berhasil didaftarkan (Mode Simulasi).",
-        display: {
-          id: "mock-disp-" + Date.now(),
-          token,
-          nama: payload.nama,
-          mode: payload.mode,
-        },
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     const { data: display, error: insertError } = await serviceSupabase
@@ -336,7 +266,8 @@ export async function createDisplayScreen(payload: {
         nama: payload.nama,
         token: token,
         mode: payload.mode,
-        custom_text: payload.customText || null,
+        pengumuman: payload.pengumuman || null,
+        is_active: true,
       })
       .select()
       .single();
@@ -364,18 +295,6 @@ export async function createDisplayScreen(payload: {
 export async function revokeDisplayToken(displayId: string) {
   try {
     const newToken = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Token display berhasil diperbarui (Mode Simulasi).",
-        newToken,
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     const { error } = await serviceSupabase
@@ -402,31 +321,21 @@ export async function revokeDisplayToken(displayId: string) {
 }
 
 /**
- * Updates display operational mode and marquee custom text.
+ * Updates display operational mode and announcement text.
  */
 export async function updateDisplayMode(
   displayId: string,
   mode: "antrean" | "info" | "bergantian",
-  customText?: string
+  pengumuman?: string
 ) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: `Mode display diperbarui ke: ${mode} (Mode Simulasi).`,
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     const { error } = await serviceSupabase
       .from("display_screens")
       .update({
         mode,
-        custom_text: customText || null,
+        pengumuman: pengumuman || null,
       })
       .eq("id", displayId);
 

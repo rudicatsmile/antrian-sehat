@@ -19,12 +19,151 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CURRENT_PATIENT, DUMMY_ACTIVE_TICKETS, DUMMY_INVOICES } from "@/lib/dummy/pasien";
+import { createClient } from "@/lib/supabase/client";
+import type { PatientProfile, QueueTicketItem, InvoiceItem } from "@/lib/types";
 import { formatRupiah } from "@/lib/utils";
 
 export default function PatientDashboardPage() {
-  const activeTicket = DUMMY_ACTIVE_TICKETS[0]; // e.g. POL-D-014 (dipanggil)
-  const unpaidInvoice = DUMMY_INVOICES.find((inv) => inv.status === "belum_bayar");
+  const [profile, setProfile] = React.useState<PatientProfile>({
+    id: "",
+    nik: "3271041508560002",
+    namaLengkap: "Pasien RSUD",
+    noWhatsapp: "628123456789",
+    tanggalLahir: "1980-01-01",
+    jenisKelamin: "L",
+    alamat: "Jl. Rumah Sakit Sejahtera",
+    noRm: "RM-PASIEN",
+    kategoriPrioritas: "normal",
+  });
+  const [activeTickets, setActiveTickets] = React.useState<QueueTicketItem[]>([]);
+  const [unpaidInvoice, setUnpaidInvoice] = React.useState<InvoiceItem | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    async function loadData() {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+
+      let patientId = user?.id;
+
+      if (!patientId) {
+        // Fallback to first profile in database if demo/unauthenticated
+        const { data: firstP } = await supabase.from("profiles").select("*").limit(1).maybeSingle();
+        if (firstP) {
+          patientId = firstP.id;
+          setProfile({
+            id: firstP.id,
+            nik: firstP.nik || "",
+            namaLengkap: firstP.nama_lengkap,
+            noWhatsapp: firstP.no_whatsapp,
+            tanggalLahir: firstP.tanggal_lahir || "",
+            jenisKelamin: (firstP.jenis_kelamin as "L" | "P") || "L",
+            alamat: firstP.alamat || "",
+            noRm: firstP.no_rm || "RM-BELUM-ADA",
+            kategoriPrioritas: firstP.kategori_prioritas || "normal",
+          });
+        }
+      } else {
+        const { data: userProfile } = await supabase.from("profiles").select("*").eq("id", patientId).maybeSingle();
+        if (userProfile) {
+          setProfile({
+            id: userProfile.id,
+            nik: userProfile.nik || "",
+            namaLengkap: userProfile.nama_lengkap,
+            noWhatsapp: userProfile.no_whatsapp,
+            tanggalLahir: userProfile.tanggal_lahir || "",
+            jenisKelamin: (userProfile.jenis_kelamin as "L" | "P") || "L",
+            alamat: userProfile.alamat || "",
+            noRm: userProfile.no_rm || "RM-BELUM-ADA",
+            kategoriPrioritas: userProfile.kategori_prioritas || "normal",
+          });
+        }
+      }
+
+      if (patientId) {
+        // Fetch tickets from database
+        const { data: tickets } = await supabase
+          .from("queue_tickets")
+          .select(`
+            id,
+            nomor_tiket,
+            tanggal,
+            status,
+            urutan,
+            prioritas,
+            triage,
+            estimasi_menit,
+            created_at,
+            units (
+              nama,
+              slug,
+              lantai,
+              buildings (nama)
+            ),
+            doctor_sessions (
+              sesi,
+              doctors (nama)
+            )
+          `)
+          .eq("patient_id", patientId)
+          .in("status", ["menunggu", "dipanggil", "dilayani"])
+          .order("created_at", { ascending: false });
+
+        if (tickets) {
+          setActiveTickets(
+            tickets.map((t: any) => ({
+              id: t.id,
+              nomorTiket: t.nomor_tiket,
+              unitSlug: t.units?.slug || "poliklinik",
+              unitNama: t.units?.nama || "Poliklinik",
+              buildingNama: t.units?.buildings?.nama || "Gedung Utama",
+              ruangLokasi: t.units?.lantai || "Lantai 1",
+              dokterNama: t.doctor_sessions?.doctors?.nama,
+              sesiNama: t.doctor_sessions?.sesi ? `Sesi ${t.doctor_sessions.sesi}` : undefined,
+              tanggal: t.tanggal,
+              waktuBooking: new Date(t.created_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
+              status: t.status,
+              urutan: t.urutan,
+              sisaAntreanDiDepan: Math.max(0, t.urutan - 1),
+              estimasiMenit: t.estimasi_menit || 15,
+              qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(t.nomor_tiket)}`,
+              prioritas: t.prioritas,
+              triageLevel: t.triage,
+              timeline: [],
+            }))
+          );
+        }
+
+        // Fetch unpaid invoice from database
+        const { data: inv } = await supabase
+          .from("invoices")
+          .select("*, queue_tickets(nomor_tiket, units(nama))")
+          .eq("patient_id", patientId)
+          .eq("status", "belum_bayar")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (inv) {
+          setUnpaidInvoice({
+            id: inv.id,
+            invoiceNo: inv.invoice_no,
+            ticketNomor: inv.queue_tickets?.nomor_tiket,
+            unitNama: inv.queue_tickets?.units?.nama || "Pelayanan RSUD",
+            tanggal: new Date(inv.created_at).toLocaleDateString("id-ID"),
+            totalAmount: inv.total_amount,
+            status: inv.status,
+            items: [],
+          });
+        }
+      }
+
+      setLoading(false);
+    }
+    loadData();
+  }, []);
+
+  const activeTicket = activeTickets[0];
 
   return (
     <div className="space-y-8">
@@ -35,10 +174,10 @@ export default function PatientDashboardPage() {
             Portal Layanan Pasien
           </span>
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight font-heading mt-0.5">
-            Selamat Datang, {CURRENT_PATIENT.namaLengkap}
+            Selamat Datang, {profile.namaLengkap}
           </h1>
           <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-            No. Rekam Medis: <strong className="text-foreground font-mono">{CURRENT_PATIENT.noRm}</strong> • Jalur Prioritas: <span className="text-blue-700 font-semibold capitalize">{CURRENT_PATIENT.kategoriPrioritas}</span>
+            No. Rekam Medis: <strong className="text-foreground font-mono">{profile.noRm}</strong> • Jalur Prioritas: <span className="text-blue-700 font-semibold capitalize">{profile.kategoriPrioritas}</span>
           </p>
         </div>
 
@@ -95,7 +234,7 @@ export default function PatientDashboardPage() {
                 </div>
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
                   {activeTicket.status === "dipanggil"
-                    ? "Segera menuju Ruang Periksa 201 Gedung A Lantai 2."
+                    ? "Segera menuju ruang pemeriksaan sesuai nomor tiket Anda."
                     : `Estimasi giliran Anda sekitar ${activeTicket.estimasiMenit} menit lagi.`}
                 </p>
               </div>
@@ -110,7 +249,7 @@ export default function PatientDashboardPage() {
                 </Button>
                 <Button variant="outline" asChild className="w-full sm:w-auto text-xs">
                   <Link href="/antrean/saya">
-                    Semua Antrean ({DUMMY_ACTIVE_TICKETS.length})
+                    Semua Antrean ({activeTickets.length})
                   </Link>
                 </Button>
               </div>
@@ -120,9 +259,9 @@ export default function PatientDashboardPage() {
             <div className="pt-4 border-t border-teal-100 flex flex-wrap items-center justify-between text-xs text-muted-foreground gap-2">
               <span className="flex items-center gap-1.5 text-teal-900 font-medium">
                 <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                Check-in Kedatangan Terverifikasi
+                Tiket Tersimpan di Database
               </span>
-              <span>Sesi: {activeTicket.sesiNama}</span>
+              <span>{activeTicket.sesiNama || "Pelayanan Aktif"}</span>
             </div>
           </div>
         </Card>
@@ -141,95 +280,73 @@ export default function PatientDashboardPage() {
               </p>
             </div>
           </div>
-          <Button size="sm" asChild className="bg-amber-600 hover:bg-amber-700 text-white self-start sm:self-auto text-xs">
+          <Button asChild size="sm" className="bg-amber-800 hover:bg-amber-900 text-white shrink-0 text-xs">
             <Link href={`/pembayaran/${unpaidInvoice.id}`}>
-              Bayar Online (Midtrans) →
+              Bayar Sekarang
             </Link>
           </Button>
         </div>
       )}
 
-      {/* Quick Booking Shortcuts */}
-      <section className="space-y-4">
-        <h2 className="text-lg font-bold font-heading">Pintasan Booking Cepat</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <Card className="hover:border-primary/50 transition-colors">
-            <CardHeader className="p-5 pb-3">
-              <div className="h-10 w-10 rounded-xl bg-teal-50 text-primary flex items-center justify-center mb-2 border border-teal-100">
-                <Stethoscope className="h-5 w-5" />
-              </div>
-              <CardTitle className="text-base">Poliklinik Rawat Jalan</CardTitle>
-              <CardDescription className="text-xs">
-                Dokter Penyakit Dalam, Anak, Bedah, Kandungan.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5 pt-0">
-              <Button asChild variant="outline" size="sm" className="w-full text-xs">
-                <Link href="/booking/poliklinik">
-                  Pilih Poli & Dokter
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
+      {/* Quick Action Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="hover:border-primary/50 transition-colors">
+          <CardHeader className="p-5 pb-3">
+            <div className="size-10 rounded-xl bg-secondary text-primary flex items-center justify-center mb-3">
+              <Stethoscope className="size-5" />
+            </div>
+            <CardTitle className="text-base font-heading">Poliklinik Spesialis</CardTitle>
+            <CardDescription className="text-xs">
+              Pilih dokter spesialis, jadwal hari praktik, dan reservasi kuota konsultasi.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-5 pt-0">
+            <Button variant="outline" size="sm" asChild className="w-full text-xs gap-1">
+              <Link href="/booking/poliklinik">
+                Booking Poli <ChevronRight className="size-3.5" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
 
-          <Card className="hover:border-primary/50 transition-colors">
-            <CardHeader className="p-5 pb-3">
-              <div className="h-10 w-10 rounded-xl bg-teal-50 text-primary flex items-center justify-center mb-2 border border-teal-100">
-                <FlaskConical className="h-5 w-5" />
-              </div>
-              <CardTitle className="text-base">Laboratorium Patologi</CardTitle>
-              <CardDescription className="text-xs">
-                Uji darah lengkap, profil lipid, urine, serologi.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5 pt-0">
-              <Button asChild variant="outline" size="sm" className="w-full text-xs">
-                <Link href="/booking/laboratorium">
-                  Booking Cek Lab
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
+        <Card className="hover:border-primary/50 transition-colors">
+          <CardHeader className="p-5 pb-3">
+            <div className="size-10 rounded-xl bg-teal-50 text-teal-700 border border-teal-100 flex items-center justify-center mb-3">
+              <FlaskConical className="size-5" />
+            </div>
+            <CardTitle className="text-base font-heading">Laboratorium & Radiologi</CardTitle>
+            <CardDescription className="text-xs">
+              Daftar antrean pengambilan sampel darah atau pemeriksaan rontgen & CT-Scan.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-5 pt-0">
+            <Button variant="outline" size="sm" asChild className="w-full text-xs gap-1">
+              <Link href="/booking/laboratorium">
+                Booking Penunjang <ChevronRight className="size-3.5" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
 
-          <Card className="hover:border-primary/50 transition-colors">
-            <CardHeader className="p-5 pb-3">
-              <div className="h-10 w-10 rounded-xl bg-teal-50 text-primary flex items-center justify-center mb-2 border border-teal-100">
-                <Ticket className="h-5 w-5" />
-              </div>
-              <CardTitle className="text-base">Radiologi & Imejing</CardTitle>
-              <CardDescription className="text-xs">
-                Rontgen X-Ray, USG 4D, CT-Scan, dan MRI.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5 pt-0">
-              <Button asChild variant="outline" size="sm" className="w-full text-xs">
-                <Link href="/booking/radiologi">
-                  Booking Radiologi
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="hover:border-primary/50 transition-colors">
-            <CardHeader className="p-5 pb-3">
-              <div className="h-10 w-10 rounded-xl bg-teal-50 text-primary flex items-center justify-center mb-2 border border-teal-100">
-                <Pill className="h-5 w-5" />
-              </div>
-              <CardTitle className="text-base">Farmasi / Obat Racik</CardTitle>
-              <CardDescription className="text-xs">
-                Pengambilan obat rawat jalan & konseling apoteker.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-5 pt-0">
-              <Button asChild variant="outline" size="sm" className="w-full text-xs">
-                <Link href="/booking/farmasi">
-                  Antrean Obat
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
+        <Card className="hover:border-primary/50 transition-colors">
+          <CardHeader className="p-5 pb-3">
+            <div className="size-10 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 flex items-center justify-center mb-3">
+              <Pill className="size-5" />
+            </div>
+            <CardTitle className="text-base font-heading">Farmasi & Obat</CardTitle>
+            <CardDescription className="text-xs">
+              Antrean pengambilan obat racik dan non-racik dengan estimasi durasi penyiapan.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-5 pt-0">
+            <Button variant="outline" size="sm" asChild className="w-full text-xs gap-1">
+              <Link href="/booking/farmasi">
+                Antrean Farmasi <ChevronRight className="size-3.5" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

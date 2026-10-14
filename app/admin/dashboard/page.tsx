@@ -1,13 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import {
-  Users,
   CreditCard,
-  Clock,
   TrendingUp,
-  Activity,
   Building,
-  ArrowRight,
   Layers,
   Cpu,
 } from "lucide-react";
@@ -15,14 +11,19 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AdminVisitChart } from "@/components/admin/admin-charts";
-import { DUMMY_ADMIN_STATS } from "@/lib/dummy/admin";
+import { getAdminStats, getChartKunjungan } from "@/lib/services/admin";
 import { formatRupiah } from "@/lib/utils";
 
 export const metadata: Metadata = {
   title: "Dasbor Administrator | Antrean Sehat RSUD",
 };
 
-export default function AdminDashboardPage() {
+export default async function AdminDashboardPage() {
+  const [stats, chartData] = await Promise.all([
+    getAdminStats(),
+    getChartKunjungan(),
+  ]);
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -35,7 +36,7 @@ export default function AdminDashboardPage() {
             Dasbor Utama Administrator RSUD
           </h1>
           <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-            Ringkasan data analitik kunjungan pasien, kepuasan, estimasi waktu tunggu, dan pendapatan harian.
+            Ringkasan data analitik kunjungan pasien, estimasi waktu tunggu, dan pendapatan langsung dari database Supabase PostgreSQL.
           </p>
         </div>
 
@@ -53,13 +54,13 @@ export default function AdminDashboardPage() {
             <span className="text-xs text-muted-foreground font-medium">Total Kunjungan Hari Ini</span>
             <div className="flex items-baseline justify-between pt-1">
               <span className="text-3xl font-black font-mono text-foreground">
-                {DUMMY_ADMIN_STATS.totalKunjunganHariIni}
+                {stats.totalKunjunganHariIni}
               </span>
               <TrendingUp className="h-4 w-4 text-emerald-600" />
             </div>
           </CardHeader>
           <CardContent className="p-5 pt-0 text-[11px] text-muted-foreground">
-            {DUMMY_ADMIN_STATS.persentaseBookingOnline}% booking via aplikasi online
+            {stats.persentaseBookingOnline}% booking via aplikasi online
           </CardContent>
         </Card>
 
@@ -68,7 +69,7 @@ export default function AdminDashboardPage() {
             <span className="text-xs text-muted-foreground font-medium">Pendapatan Hari Ini</span>
             <div className="flex items-baseline justify-between pt-1">
               <span className="text-xl sm:text-2xl font-black font-mono text-emerald-700">
-                {formatRupiah(DUMMY_ADMIN_STATS.totalPendapatanHariIni)}
+                {formatRupiah(stats.totalPendapatanHariIni)}
               </span>
               <CreditCard className="h-4 w-4 text-primary" />
             </div>
@@ -83,13 +84,13 @@ export default function AdminDashboardPage() {
             <span className="text-xs text-muted-foreground font-medium">Rata-rata Waktu Tunggu</span>
             <div className="flex items-baseline justify-between pt-1">
               <span className="text-3xl font-black font-mono text-teal-800">
-                {DUMMY_ADMIN_STATS.rataRataWaktuTungguMenit}
+                {stats.rataRataWaktuTungguMenit}
               </span>
               <span className="text-xs font-semibold text-muted-foreground">menit</span>
             </div>
           </CardHeader>
           <CardContent className="p-5 pt-0 text-[11px] text-muted-foreground">
-            Turun 34% dibanding metode antrean manual
+            Sesuai standar operasional SPM RSUD
           </CardContent>
         </Card>
 
@@ -98,7 +99,7 @@ export default function AdminDashboardPage() {
             <span className="text-xs text-muted-foreground font-medium">Tingkat Kepuasan Pasien</span>
             <div className="flex items-baseline justify-between pt-1">
               <span className="text-3xl font-black font-mono text-teal-800">
-                {DUMMY_ADMIN_STATS.kepuasanPasien}%
+                {stats.kepuasanPasien}%
               </span>
               <Badge className="bg-emerald-100 text-emerald-800 text-[10px]">Sangat Baik</Badge>
             </div>
@@ -127,7 +128,7 @@ export default function AdminDashboardPage() {
           </div>
         </CardHeader>
         <CardContent className="p-6 pt-2">
-          <AdminVisitChart />
+          <AdminVisitChart data={chartData} />
         </CardContent>
       </Card>
 

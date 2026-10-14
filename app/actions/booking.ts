@@ -3,7 +3,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { revalidatePath } from "next/cache";
-import { z } from "zod";
 
 export interface BookingPayload {
   patientId: string;
@@ -60,15 +59,14 @@ export async function getEstimatedWait(unitId: string, supabaseClient?: any): Pr
     // 1. Get average service duration for this unit
     const { data: stats } = await supabase
       .from("unit_stats")
-      .select("avg_service_seconds")
+      .select("rata_rata_layanan_detik")
       .eq("unit_id", unitId)
       .maybeSingle();
 
     let avgMinutes = 10;
-    if (stats?.avg_service_seconds) {
-      avgMinutes = Math.max(2, Math.round(stats.avg_service_seconds / 60));
+    if (stats?.rata_rata_layanan_detik) {
+      avgMinutes = Math.max(2, Math.round(stats.rata_rata_layanan_detik / 60));
     } else {
-      // Fallback to unit's default_service_minutes
       const { data: unit } = await supabase
         .from("units")
         .select("default_service_minutes")
@@ -91,7 +89,7 @@ export async function getEstimatedWait(unitId: string, supabaseClient?: any): Pr
     const waitingCount = count || 0;
     return (waitingCount + 1) * avgMinutes;
   } catch {
-    return 15; // default fallback estimate
+    return 15;
   }
 }
 
@@ -100,7 +98,7 @@ export async function getEstimatedWait(unitId: string, supabaseClient?: any): Pr
  */
 export async function createBooking(payload: BookingPayload) {
   try {
-    const { patientId, unitId, unitKind, bookingDate, sessionId, doctorId, triageLevel, priorityCategory, keluhan } = payload;
+    const { patientId, unitId, unitKind, bookingDate, sessionId, triageLevel, priorityCategory } = payload;
 
     // 1. Validate Date (H-0 to H-7)
     const todayStr = new Date().toISOString().split("T")[0];
@@ -122,34 +120,12 @@ export async function createBooking(payload: BookingPayload) {
       };
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      const mockSeq = Math.floor(1 + Math.random() * 40);
-      const mockTicketNo = await generateTicketNumber(unitKind, mockSeq, triageLevel, "A");
-      return {
-        success: true,
-        message: "Booking antrean berhasil dibuat (Mode Simulasi).",
-        ticket: {
-          id: "mock-ticket-" + Date.now(),
-          nomor_antrean: mockTicketNo,
-          nomor_urut: mockSeq,
-          status: "menunggu",
-          tanggal: bookingDate,
-          estimasi_menit: mockSeq * 10,
-          unit_id: unitId,
-          patient_id: patientId,
-        },
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     // 2. Validate: Maximum 1 active ticket per unit per day for this patient
     const { data: existingTicket } = await serviceSupabase
       .from("queue_tickets")
-      .select("id, nomor_antrean, status")
+      .select("id, nomor_tiket, status")
       .eq("patient_id", patientId)
       .eq("unit_id", unitId)
       .eq("tanggal", bookingDate)
@@ -159,7 +135,7 @@ export async function createBooking(payload: BookingPayload) {
     if (existingTicket) {
       return {
         success: false,
-        error: `Anda sudah memiliki tiket antrean aktif (${existingTicket.nomor_antrean}) untuk unit ini pada tanggal tersebut.`,
+        error: `Anda sudah memiliki tiket antrean aktif (${existingTicket.nomor_tiket}) untuk unit ini pada tanggal tersebut.`,
       };
     }
 
@@ -196,15 +172,15 @@ export async function createBooking(payload: BookingPayload) {
         id: ticketId,
         patient_id: patientId,
         unit_id: unitId,
-        session_id: sessionId || null,
-        nomor_antrean: ticketNumber,
-        nomor_urut: sequenceNumber,
+        doctor_session_id: sessionId || null,
+        nomor_tiket: ticketNumber,
+        urutan: sequenceNumber,
         status: "menunggu",
-        triage_level: triageLevel || null,
-        kategori_prioritas: priorityCategory || "normal",
+        triage: triageLevel || null,
+        prioritas: priorityCategory || "normal",
         tanggal: bookingDate,
         estimasi_menit: estimatedMinutes,
-        keluhan: keluhan || null,
+        sumber: "online",
       })
       .select()
       .single();
@@ -213,7 +189,17 @@ export async function createBooking(payload: BookingPayload) {
       // Rollback session counter if session was booked
       if (sessionId) {
         try {
-          await serviceSupabase.rpc("decrement_doctor_session", { p_session_id: sessionId });
+          const { data: s } = await serviceSupabase
+            .from("doctor_sessions")
+            .select("terpakai")
+            .eq("id", sessionId)
+            .single();
+          if (s) {
+            await serviceSupabase
+              .from("doctor_sessions")
+              .update({ terpakai: Math.max(0, s.terpakai - 1) })
+              .eq("id", sessionId);
+          }
         } catch {
           // ignore
         }
@@ -224,9 +210,9 @@ export async function createBooking(payload: BookingPayload) {
     // 6. Record event in queue_events
     await serviceSupabase.from("queue_events").insert({
       ticket_id: ticketId,
-      action: "dibuat",
+      aksi: "buat",
       actor_id: patientId,
-      keterangan: `Booking tiket ${ticketNumber} dibuat oleh pasien.`,
+      catatan: `Booking tiket ${ticketNumber} dibuat oleh pasien.`,
     });
 
     revalidatePath("/antrean/saya");
@@ -248,16 +234,6 @@ export async function createBooking(payload: BookingPayload) {
  */
 export async function cancelBooking(ticketId: string, patientId: string, alasan?: string) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Tiket antrean berhasil dibatalkan (Mode Simulasi).",
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     // 1. Fetch ticket and session
@@ -268,7 +244,7 @@ export async function cancelBooking(ticketId: string, patientId: string, alasan?
         doctor_sessions (
           id,
           jam_mulai,
-          slot
+          terpakai
         )
       `)
       .eq("id", ticketId)
@@ -307,7 +283,7 @@ export async function cancelBooking(ticketId: string, patientId: string, alasan?
       .from("queue_tickets")
       .update({
         status: "batal",
-        selesai_pada: new Date().toISOString(),
+        selesai_at: new Date().toISOString(),
       })
       .eq("id", ticketId);
 
@@ -316,21 +292,21 @@ export async function cancelBooking(ticketId: string, patientId: string, alasan?
     }
 
     // 4. Release quota on doctor_sessions if session linked
-    if (ticket.session_id) {
+    if (ticket.doctor_session_id) {
       await serviceSupabase
         .from("doctor_sessions")
         .update({
           terpakai: Math.max(0, (ticket.doctor_sessions?.terpakai || 1) - 1),
         })
-        .eq("id", ticket.session_id);
+        .eq("id", ticket.doctor_session_id);
     }
 
     // 5. Record queue event
     await serviceSupabase.from("queue_events").insert({
       ticket_id: ticketId,
-      action: "dibatalkan",
+      aksi: "batal",
       actor_id: patientId,
-      keterangan: alasan || "Dibatalkan oleh pasien.",
+      catatan: alasan || "Dibatalkan oleh pasien.",
     });
 
     revalidatePath("/antrean/saya");
@@ -351,21 +327,11 @@ export async function cancelBooking(ticketId: string, patientId: string, alasan?
  */
 export async function checkInTicket(ticketId: string, patientId: string) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Check-in antrean berhasil dikonfirmasi (Mode Simulasi).",
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     const { data: ticket, error: fetchError } = await serviceSupabase
       .from("queue_tickets")
-      .select("id, status, tanggal, nomor_antrean")
+      .select("id, status, tanggal, nomor_tiket")
       .eq("id", ticketId)
       .eq("patient_id", patientId)
       .single();
@@ -385,9 +351,9 @@ export async function checkInTicket(ticketId: string, patientId: string) {
     // Record check-in event
     await serviceSupabase.from("queue_events").insert({
       ticket_id: ticketId,
-      action: "check_in",
+      aksi: "buat",
       actor_id: patientId,
-      keterangan: `Pasien check-in untuk nomor ${ticket.nomor_antrean}.`,
+      catatan: `Pasien check-in di RSUD untuk nomor ${ticket.nomor_tiket}.`,
     });
 
     revalidatePath(`/antrean/${ticketId}`);
@@ -395,7 +361,7 @@ export async function checkInTicket(ticketId: string, patientId: string) {
 
     return {
       success: true,
-      message: `Check-in tiket ${ticket.nomor_antrean} berhasil. Silakan menuju ruang tunggu unit terkait.`,
+      message: `Check-in tiket ${ticket.nomor_tiket} berhasil. Silakan menuju ruang tunggu unit terkait.`,
     };
   } catch (err: any) {
     return { success: false, error: err.message || "Gagal melakukan check-in antrean." };

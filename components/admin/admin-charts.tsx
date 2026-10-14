@@ -11,9 +11,13 @@ import {
   Legend,
   CartesianGrid,
 } from "recharts";
-import { DUMMY_CHART_KUNJUNGAN } from "@/lib/dummy/admin";
+import { ChartKunjunganGedung } from "@/lib/types";
 
-export function AdminVisitChart() {
+interface AdminVisitChartProps {
+  data?: ChartKunjunganGedung[];
+}
+
+export function AdminVisitChart({ data = [] }: AdminVisitChartProps) {
   const [mounted, setMounted] = React.useState(false);
 
   React.useEffect(() => {
@@ -27,7 +31,7 @@ export function AdminVisitChart() {
   return (
     <div className="h-72 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={DUMMY_CHART_KUNJUNGAN} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+        <BarChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
           <XAxis dataKey="jam" tick={{ fontSize: 11, fill: "#64748b" }} />
           <YAxis tick={{ fontSize: 11, fill: "#64748b" }} />

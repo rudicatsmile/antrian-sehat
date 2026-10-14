@@ -6,11 +6,73 @@ import { CreditCard, CheckCircle2, Clock, ArrowRight, FileText, AlertCircle } fr
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { DUMMY_INVOICES, InvoiceItem } from "@/lib/dummy/pasien";
+import { createClient } from "@/lib/supabase/client";
+import type { InvoiceItem } from "@/lib/types";
 import { formatRupiah } from "@/lib/utils";
 
 export default function PembayaranListPage() {
-  const [invoices] = React.useState<InvoiceItem[]>(DUMMY_INVOICES);
+  const [invoices, setInvoices] = React.useState<InvoiceItem[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    async function load() {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+
+      let query = supabase
+        .from("invoices")
+        .select(`
+          id,
+          invoice_no,
+          total_amount,
+          status,
+          created_at,
+          paid_at,
+          metode_bayar,
+          queue_tickets (
+            nomor_tiket,
+            units (nama)
+          ),
+          invoice_items (
+            id,
+            nama_item,
+            qty,
+            harga_satuan
+          )
+        `)
+        .order("created_at", { ascending: false });
+
+      if (user) {
+        query = query.eq("patient_id", user.id);
+      }
+
+      const { data } = await query;
+      if (data) {
+        setInvoices(
+          data.map((inv: any) => ({
+            id: inv.id,
+            invoiceNo: inv.invoice_no,
+            ticketNomor: inv.queue_tickets?.nomor_tiket,
+            unitNama: inv.queue_tickets?.units?.nama || "Pelayanan RSUD",
+            tanggal: new Date(inv.created_at).toLocaleDateString("id-ID"),
+            totalAmount: inv.total_amount,
+            status: inv.status,
+            paidAt: inv.paid_at,
+            metodeBayar: inv.metode_bayar,
+            items: (inv.invoice_items || []).map((it: any) => ({
+              id: it.id,
+              namaItem: it.nama_item,
+              qty: it.qty,
+              hargaSatuan: it.harga_satuan,
+              subtotal: it.qty * it.harga_satuan,
+            })),
+          }))
+        );
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
 
   return (
     <div className="space-y-6 max-w-4xl">

@@ -8,21 +8,166 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { DUMMY_ACTIVE_TICKETS, CURRENT_PATIENT } from "@/lib/dummy/pasien";
+import { createClient } from "@/lib/supabase/client";
+import type { QueueTicketItem, PatientProfile } from "@/lib/types";
 import { HOSPITAL_NAME } from "@/lib/constants";
 
 export default function DetailTiketPage() {
   const params = useParams();
   const ticketId = params?.ticketId as string;
-  const ticket = DUMMY_ACTIVE_TICKETS.find((t) => t.id === ticketId) || DUMMY_ACTIVE_TICKETS[0];
+
+  const [ticket, setTicket] = React.useState<QueueTicketItem | null>(null);
+  const [patient, setPatient] = React.useState<PatientProfile>({
+    id: "",
+    nik: "",
+    namaLengkap: "Pasien RSUD",
+    noWhatsapp: "",
+    tanggalLahir: "",
+    jenisKelamin: "L",
+    alamat: "",
+    noRm: "RM-PASIEN",
+    kategoriPrioritas: "normal",
+  });
+  const [loading, setLoading] = React.useState(true);
   const [checkedIn, setCheckedIn] = React.useState(false);
   const [checkingIn, setCheckingIn] = React.useState(false);
 
+  React.useEffect(() => {
+    async function fetchTicket() {
+      if (!ticketId) return;
+      const supabase = createClient();
+
+      const { data: rawT } = await supabase
+        .from("queue_tickets")
+        .select(`
+          id,
+          nomor_tiket,
+          tanggal,
+          status,
+          urutan,
+          prioritas,
+          triage,
+          estimasi_menit,
+          created_at,
+          patient_id,
+          profiles (
+            id,
+            nik,
+            nama_lengkap,
+            no_rm,
+            no_whatsapp,
+            kategori_prioritas
+          ),
+          units (
+            nama,
+            slug,
+            lantai,
+            buildings (nama)
+          ),
+          doctor_sessions (
+            sesi,
+            doctors (nama)
+          )
+        `)
+        .eq("id", ticketId)
+        .maybeSingle();
+
+      const t: any = rawT;
+      if (t) {
+        if (t.profiles) {
+          const prof = Array.isArray(t.profiles) ? t.profiles[0] : t.profiles;
+          if (prof) {
+            setPatient({
+              id: prof.id,
+              nik: prof.nik || "",
+              namaLengkap: prof.nama_lengkap,
+              noWhatsapp: prof.no_whatsapp,
+              tanggalLahir: "",
+              jenisKelamin: "L",
+              alamat: "",
+              noRm: prof.no_rm || "RM-BELUM-ADA",
+              kategoriPrioritas: prof.kategori_prioritas || "normal",
+            });
+          }
+        }
+
+        const { data: events } = await supabase
+          .from("queue_events")
+          .select("created_at, aksi, catatan")
+          .eq("ticket_id", t.id)
+          .order("created_at", { ascending: true });
+
+        const timeline = (events && events.length > 0)
+          ? events.map((e) => ({
+              waktu: new Date(e.created_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
+              judul: e.aksi.toUpperCase(),
+              keterangan: e.catatan || `Aksi ${e.aksi} tercatat pada tiket.`,
+              selesai: true,
+            }))
+          : [
+              {
+                waktu: new Date(t.created_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
+                judul: "Tiket Diterbitkan",
+                keterangan: "Nomor antrean berhasil dibuat di sistem Antrean Sehat.",
+                selesai: true,
+              },
+              {
+                waktu: t.status === "dipanggil" || t.status === "dilayani" || t.status === "selesai" ? "Aktif" : "--:--",
+                judul: "Panggilan Loket / Poli",
+                keterangan: "Pasien dipanggil menuju ruang atau loket pelayanan.",
+                selesai: t.status === "dipanggil" || t.status === "dilayani" || t.status === "selesai",
+              },
+              {
+                waktu: t.status === "dilayani" || t.status === "selesai" ? "Sedang berjalan" : "--:--",
+                judul: "Sedang Dilayani",
+                keterangan: "Pemeriksaan medis atau proses administrasi berlangsung.",
+                selesai: t.status === "dilayani" || t.status === "selesai",
+              },
+              {
+                waktu: t.status === "selesai" ? "Selesai" : "--:--",
+                judul: "Pelayanan Selesai",
+                keterangan: "Pelayanan tuntas dan resep/instruksi diberikan.",
+                selesai: t.status === "selesai",
+              },
+            ];
+
+        const unit = Array.isArray(t.units) ? t.units[0] : t.units;
+        const building = unit?.buildings ? (Array.isArray(unit.buildings) ? unit.buildings[0] : unit.buildings) : null;
+        const session = Array.isArray(t.doctor_sessions) ? t.doctor_sessions[0] : t.doctor_sessions;
+        const doctor = session?.doctors ? (Array.isArray(session.doctors) ? session.doctors[0] : session.doctors) : null;
+
+        setTicket({
+          id: t.id,
+          nomorTiket: t.nomor_tiket,
+          unitSlug: unit?.slug || "poliklinik",
+          unitNama: unit?.nama || "Poliklinik",
+          buildingNama: building?.nama || "Gedung Utama",
+          ruangLokasi: unit?.lantai || "Lantai 1",
+          dokterNama: doctor?.nama,
+          sesiNama: session?.sesi ? `Sesi ${session.sesi}` : undefined,
+          tanggal: t.tanggal,
+          waktuBooking: new Date(t.created_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
+          status: t.status,
+          urutan: t.urutan,
+          sisaAntreanDiDepan: Math.max(0, t.urutan - 1),
+          estimasiMenit: t.estimasi_menit || 15,
+          qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(t.nomor_tiket)}`,
+          prioritas: t.prioritas,
+          triageLevel: t.triage,
+          timeline,
+        });
+      }
+      setLoading(false);
+    }
+    fetchTicket();
+  }, [ticketId]);
+
   const handleCheckIn = async () => {
+    if (!ticket) return;
     setCheckingIn(true);
     try {
       const { checkInTicket } = await import("@/app/actions/booking");
-      const res = await checkInTicket(ticket.id, "pasien-demo-id");
+      const res = await checkInTicket(ticket.id, patient.id || "demo");
       if (res.success) {
         setCheckedIn(true);
         toast.success(res.message || "Check-in berhasil dikonfirmasi.");
@@ -35,6 +180,21 @@ export default function DetailTiketPage() {
       setCheckingIn(false);
     }
   };
+
+  if (loading) {
+    return <div className="text-center py-20 text-muted-foreground text-sm">Memuat data tiket dari Supabase...</div>;
+  }
+
+  if (!ticket) {
+    return (
+      <div className="text-center py-20 space-y-4">
+        <h2 className="text-lg font-bold">Tiket antrean tidak ditemukan</h2>
+        <Button asChild size="sm">
+          <Link href="/antrean/saya">Kembali ke Antrean Saya</Link>
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -60,41 +220,41 @@ export default function DetailTiketPage() {
             {ticket.unitNama} • {ticket.buildingNama}
           </p>
 
-          <div className="mt-6 inline-block bg-white text-teal-950 px-8 py-3 rounded-2xl shadow-md border border-teal-100">
-            <span className="text-[11px] text-muted-foreground uppercase font-semibold tracking-wider block">
-              NOMOR ANTREAN
-            </span>
-            <span className="text-4xl sm:text-5xl font-black font-mono tracking-tight block">
+          <div className="mt-6 flex flex-col items-center">
+            <span className="text-xs text-teal-200 uppercase font-mono">Nomor Antrean Anda</span>
+            <div className="text-5xl sm:text-6xl font-black font-mono tracking-wider mt-1 text-white">
               {ticket.nomorTiket}
-            </span>
+            </div>
+            <Badge className="mt-3 bg-white text-teal-900 hover:bg-teal-50 font-semibold text-xs uppercase px-3 py-1">
+              STATUS: {ticket.status}
+            </Badge>
           </div>
         </div>
 
-        {/* QR Code and Patient Info */}
+        {/* Mid Body */}
         <div className="p-6 sm:p-8 space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-12 gap-6 items-center">
-            {/* QR Section */}
-            <div className="sm:col-span-5 flex flex-col items-center justify-center p-4 bg-surface rounded-xl border border-border text-center">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
+            {/* QR Code Container */}
+            <div className="sm:col-span-5 flex flex-col items-center justify-center p-4 rounded-xl bg-surface border border-border text-center space-y-2">
               <img
                 src={ticket.qrCodeUrl}
                 alt={`QR Code ${ticket.nomorTiket}`}
-                className="w-36 h-36 rounded-lg shadow-2xs border border-border bg-white p-2"
+                className="h-36 w-36 rounded-lg border border-border shadow-2xs"
               />
-              <span className="text-[11px] text-muted-foreground mt-2 block font-mono">
-                Pindai di Kiosk / Loket
+              <span className="text-[11px] text-muted-foreground font-mono">
+                Scan di Kios Mandiri / Loket
               </span>
             </div>
 
-            {/* Patient & Service Details */}
+            {/* Patient & Ticket Details */}
             <div className="sm:col-span-7 space-y-3 text-xs">
               <div className="flex justify-between py-1.5 border-b border-border">
                 <span className="text-muted-foreground">Nama Pasien:</span>
-                <span className="font-semibold text-foreground">{CURRENT_PATIENT.namaLengkap}</span>
+                <span className="font-semibold text-foreground">{patient.namaLengkap}</span>
               </div>
               <div className="flex justify-between py-1.5 border-b border-border">
                 <span className="text-muted-foreground">No. Rekam Medis:</span>
-                <span className="font-mono font-bold text-foreground">{CURRENT_PATIENT.noRm}</span>
+                <span className="font-mono font-bold text-foreground">{patient.noRm}</span>
               </div>
               <div className="flex justify-between py-1.5 border-b border-border">
                 <span className="text-muted-foreground">Tanggal Kunjungan:</span>
@@ -139,50 +299,41 @@ export default function DetailTiketPage() {
                       <span className="font-semibold text-xs text-foreground">{step.judul}</span>
                       <span className="text-[10px] text-muted-foreground font-mono">({step.waktu})</span>
                     </div>
-                    <p className="text-[11px] text-muted-foreground leading-relaxed">
-                      {step.keterangan}
-                    </p>
+                    <p className="text-xs text-muted-foreground">{step.keterangan}</p>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Action buttons */}
-          <div className="pt-4 border-t border-border flex flex-wrap gap-2 justify-end">
-            {!checkedIn ? (
+          {/* Actions */}
+          <div className="flex flex-wrap items-center gap-3 pt-6 border-t border-border justify-between">
+            <Button
+              onClick={handleCheckIn}
+              disabled={checkedIn || checkingIn}
+              className="gap-2 text-xs shadow-xs"
+            >
+              {checkedIn ? (
+                <>
+                  <Check className="h-4 w-4" /> Check-in Berhasil
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="h-4 w-4" /> Konfirmasi Check-in Kedatangan
+                </>
+              )}
+            </Button>
+
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleCheckIn}
-                disabled={checkingIn}
-                className="text-xs gap-1.5 border-teal-300 text-teal-800 hover:bg-teal-50"
+                onClick={() => window.print()}
+                className="gap-1.5 text-xs"
               >
-                <Check className="h-3.5 w-3.5" />
-                {checkingIn ? "Mengonfirmasi..." : "Simulasi Konfirmasi Check-In Kiosk"}
+                <Printer className="h-4 w-4" /> Cetak Tiket
               </Button>
-            ) : (
-              <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 py-1.5 px-3">
-                ✓ Pasien Sudah Check-In
-              </Badge>
-            )}
-
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs gap-1.5"
-              onClick={() => {
-                if (typeof window !== "undefined") window.print();
-              }}
-            >
-              <Printer className="h-3.5 w-3.5" />
-              Cetak Tiket
-            </Button>
-            <Button size="sm" asChild className="text-xs">
-              <Link href="/pembayaran">
-                Lihat Rincian Tagihan
-              </Link>
-            </Button>
+            </div>
           </div>
         </div>
       </div>

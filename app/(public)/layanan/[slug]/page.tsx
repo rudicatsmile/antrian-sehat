@@ -15,8 +15,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { DUMMY_LAYANAN } from "@/lib/dummy/layanan";
-import { DUMMY_DOKTER } from "@/lib/dummy/dokter";
+import { getLayananBySlug } from "@/lib/services/layanan";
+import { getDokterList } from "@/lib/services/dokter";
 import { APP_NAME, HOSPITAL_NAME } from "@/lib/constants";
 
 interface Props {
@@ -25,7 +25,7 @@ interface Props {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  const unit = DUMMY_LAYANAN.find((u) => u.slug === slug);
+  const unit = await getLayananBySlug(slug);
   if (!unit) return { title: "Layanan Tidak Ditemukan" };
 
   return {
@@ -36,13 +36,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function LayananDetailPage({ params }: Props) {
   const { slug } = await params;
-  const unit = DUMMY_LAYANAN.find((u) => u.slug === slug);
+  const unit = await getLayananBySlug(slug);
 
   if (!unit) {
     notFound();
   }
 
-  const relatedDoctors = DUMMY_DOKTER.filter((d) => d.unitSlug === slug);
+  const relatedDoctors = await getDokterList(slug);
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-10 sm:px-6 space-y-8">

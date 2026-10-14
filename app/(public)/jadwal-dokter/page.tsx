@@ -8,15 +8,72 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { DUMMY_DOKTER, Doctor } from "@/lib/dummy/dokter";
+import { createClient } from "@/lib/supabase/client";
+import type { Doctor, DoctorSession } from "@/lib/types";
 
 export default function JadwalDokterPage() {
+  const [doctors, setDoctors] = React.useState<Doctor[]>([]);
+  const [loading, setLoading] = React.useState(true);
   const [search, setSearch] = React.useState("");
   const [selectedDay, setSelectedDay] = React.useState<string>("all");
 
+  React.useEffect(() => {
+    async function load() {
+      const supabase = createClient();
+      const today = new Date().toISOString().split("T")[0];
+
+      const { data: docs } = await supabase
+        .from("doctors")
+        .select("*, units(nama, slug)")
+        .eq("is_active", true);
+
+      if (docs) {
+        const docIds = docs.map((d: any) => d.id);
+        const { data: sessions } = await supabase
+          .from("doctor_sessions")
+          .select("*")
+          .in("doctor_id", docIds)
+          .eq("tanggal", today)
+          .order("jam_mulai", { ascending: true });
+
+        const mapped: Doctor[] = docs.map((d: any) => {
+          const docSessions: DoctorSession[] = (sessions || [])
+            .filter((s: any) => s.doctor_id === d.id)
+            .map((s: any) => ({
+              id: s.id,
+              sesi: s.sesi,
+              jamMulai: s.jam_mulai.slice(0, 5),
+              jamSelesai: s.jam_selesai.slice(0, 5),
+              kuota: s.kuota,
+              terpakai: s.terpakai,
+              isAktif: s.is_aktif,
+            }));
+
+          return {
+            id: d.id,
+            nama: d.nama,
+            gelar: "Spesialis",
+            spesialisasi: d.spesialisasi,
+            unitSlug: d.units?.slug || "poliklinik",
+            unitNama: d.units?.nama || "Poliklinik",
+            fotoUrl: "https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=300&auto=format&fit=crop&q=80",
+            jadwalHari: ["Senin", "Selasa", "Rabu", "Kamis", "Jumat"],
+            ruangPraktek: "Ruang Konsultasi Dokter",
+            sessions: docSessions.length > 0 ? docSessions : [
+              { id: "def-1", sesi: "pagi", jamMulai: "08:00", jamSelesai: "11:30", kuota: 30, terpakai: 0, isAktif: true }
+            ],
+          };
+        });
+        setDoctors(mapped);
+      }
+      setLoading(false);
+    }
+    load();
+  }, []);
+
   const days = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
 
-  const filteredDoctors = DUMMY_DOKTER.filter((doc) => {
+  const filteredDoctors = doctors.filter((doc) => {
     const matchSearch =
       doc.nama.toLowerCase().includes(search.toLowerCase()) ||
       doc.spesialisasi.toLowerCase().includes(search.toLowerCase()) ||

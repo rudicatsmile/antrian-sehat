@@ -1,7 +1,7 @@
 import { MetadataRoute } from "next";
-import { DUMMY_LAYANAN } from "@/lib/dummy/layanan";
+import { getLayananList } from "@/lib/services/layanan";
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://antreansehat.rsud.go.id";
   const currentDate = new Date();
 
@@ -58,7 +58,8 @@ export default function sitemap(): MetadataRoute.Sitemap {
   ];
 
   // Dynamic service detail routes
-  const serviceRoutes = DUMMY_LAYANAN.map((layanan) => ({
+  const units = await getLayananList();
+  const serviceRoutes = units.map((layanan) => ({
     url: `${baseUrl}/layanan/${layanan.slug}`,
     lastModified: currentDate,
     changeFrequency: "weekly" as const,

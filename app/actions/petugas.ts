@@ -8,26 +8,10 @@ import { revalidatePath } from "next/cache";
  * Order of precedence:
  * 1. Triage: Merah -> Kuning -> Hijau
  * 2. Priority category: emergency -> lansia -> disabilitas -> ibu_hamil -> normal
- * 3. Sequence number: nomor_urut ASC
+ * 3. Sequence: urutan ASC
  */
 export async function callNextTicket(unitId: string, counterId?: string, staffId?: string) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Nomor antrean berhasil dipanggil (Mode Simulasi).",
-        ticket: {
-          id: "mock-ticket-called-" + Date.now(),
-          nomor_antrean: "POL-A-015",
-          nomor_urut: 15,
-          status: "dipanggil",
-        },
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
     const today = new Date().toISOString().split("T")[0];
 
@@ -50,33 +34,34 @@ export async function callNextTicket(unitId: string, counterId?: string, staffId
     // Sorting algorithm:
     // 1. Triage level weight: merah = 3, kuning = 2, hijau = 1, null = 0
     // 2. Priority weight: emergency = 5, lansia = 4, disabilitas = 3, ibu_hamil = 2, normal = 1
-    // 3. Sequence: nomor_urut ascending
+    // 3. Sequence: urutan ascending
     const triageScore: Record<string, number> = { merah: 3, kuning: 2, hijau: 1 };
     const priorityScore: Record<string, number> = { emergency: 5, lansia: 4, disabilitas: 3, ibu_hamil: 2, normal: 1 };
 
     const sorted = [...waitingTickets].sort((a, b) => {
-      const aTriage = triageScore[a.triage_level || ""] || 0;
-      const bTriage = triageScore[b.triage_level || ""] || 0;
+      const aTriage = triageScore[a.triage || ""] || 0;
+      const bTriage = triageScore[b.triage || ""] || 0;
       if (aTriage !== bTriage) return bTriage - aTriage;
 
-      const aPriority = priorityScore[a.kategori_prioritas || "normal"] || 1;
-      const bPriority = priorityScore[b.kategori_prioritas || "normal"] || 1;
-      if (aPriority !== bPriority) return bPriority - aPriority;
+      const aPrio = priorityScore[a.prioritas || "normal"] || 1;
+      const bPrio = priorityScore[b.prioritas || "normal"] || 1;
+      if (aPrio !== bPrio) return bPrio - aPrio;
 
-      return (a.nomor_urut || 0) - (b.nomor_urut || 0);
+      return (a.urutan || 0) - (b.urutan || 0);
     });
 
-    const nextTicket = sorted[0];
+    const targetTicket = sorted[0];
 
-    // Update ticket to 'dipanggil'
-    const nowIso = new Date().toISOString();
-    const { data: updatedTicket, error: updateError } = await serviceSupabase
+    // Update ticket status to 'dipanggil'
+    const { data: updated, error: updateError } = await serviceSupabase
       .from("queue_tickets")
       .update({
         status: "dipanggil",
-        dipanggil_pada: nowIso,
+        counter_id: counterId || null,
+        dipanggil_at: new Date().toISOString(),
+        jumlah_panggilan: (targetTicket.jumlah_panggilan || 0) + 1,
       })
-      .eq("id", nextTicket.id)
+      .eq("id", targetTicket.id)
       .select()
       .single();
 
@@ -84,21 +69,22 @@ export async function callNextTicket(unitId: string, counterId?: string, staffId
       return { success: false, error: updateError.message };
     }
 
-    // Record into queue_events
+    // Record event
     await serviceSupabase.from("queue_events").insert({
-      ticket_id: nextTicket.id,
-      action: "dipanggil",
+      ticket_id: targetTicket.id,
+      aksi: "panggil",
       actor_id: staffId || null,
-      keterangan: counterId ? `Dipanggil ke Loket/Ruang ${counterId}` : "Dipanggil oleh petugas",
+      catatan: `Nomor antrean ${targetTicket.nomor_tiket} dipanggil oleh petugas.`,
     });
 
-    revalidatePath(`/petugas/panel/${unitId}`);
+    revalidatePath("/petugas/panel");
+    revalidatePath("/petugas/dashboard");
     revalidatePath("/display");
 
     return {
       success: true,
-      message: `Nomor antrean ${nextTicket.nomor_antrean} berhasil dipanggil.`,
-      ticket: updatedTicket,
+      message: `Nomor antrean ${targetTicket.nomor_tiket} berhasil dipanggil.`,
+      ticket: updated,
     };
   } catch (err: any) {
     return { success: false, error: err.message || "Gagal memanggil antrean berikutnya." };
@@ -106,27 +92,15 @@ export async function callNextTicket(unitId: string, counterId?: string, staffId
 }
 
 /**
- * Recalls the current ticket. Strict limit of max 3 recalls.
+ * Recalls ticket with maximum 3 times limit.
  */
 export async function recallTicket(ticketId: string, staffId?: string) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Nomor antrean berhasil dipanggil ulang (Mode Simulasi - Panggilan ke-2).",
-        recallCount: 2,
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
-    // Fetch ticket and check how many times it has been recalled
     const { data: ticket, error: fetchError } = await serviceSupabase
       .from("queue_tickets")
-      .select("id, nomor_antrean, unit_id, status")
+      .select("id, nomor_tiket, jumlah_panggilan, status")
       .eq("id", ticketId)
       .single();
 
@@ -134,35 +108,44 @@ export async function recallTicket(ticketId: string, staffId?: string) {
       return { success: false, error: "Tiket antrean tidak ditemukan." };
     }
 
-    const { count: recallEventsCount } = await serviceSupabase
-      .from("queue_events")
-      .select("*", { count: "exact", head: true })
-      .eq("ticket_id", ticketId)
-      .eq("action", "dipanggil_ulang");
-
-    const count = recallEventsCount || 0;
-    if (count >= 3) {
+    const currentCount = ticket.jumlah_panggilan || 1;
+    if (currentCount >= 3) {
       return {
         success: false,
-        error: `Batas maksimal 3 kali panggilan ulang untuk tiket ${ticket.nomor_antrean} telah tercapai. Silakan lewati nomor ini agar antrean lain dapat berjalan.`,
+        error: `Nomor ${ticket.nomor_tiket} telah dipanggil maksimal 3 kali. Silakan pilih aksi 'Lewati'.`,
       };
     }
 
-    // Insert recall event
+    const newCount = currentCount + 1;
+    const { data: updated, error: updateError } = await serviceSupabase
+      .from("queue_tickets")
+      .update({
+        jumlah_panggilan: newCount,
+        dipanggil_at: new Date().toISOString(),
+      })
+      .eq("id", ticketId)
+      .select()
+      .single();
+
+    if (updateError) {
+      return { success: false, error: updateError.message };
+    }
+
     await serviceSupabase.from("queue_events").insert({
       ticket_id: ticketId,
-      action: "dipanggil_ulang",
+      aksi: "panggil_ulang",
       actor_id: staffId || null,
-      keterangan: `Panggilan ulang ke-${count + 1}`,
+      catatan: `Panggilan ulang ke-${newCount} untuk tiket ${ticket.nomor_tiket}.`,
     });
 
-    revalidatePath(`/petugas/panel/${ticket.unit_id}`);
+    revalidatePath("/petugas/panel");
     revalidatePath("/display");
 
     return {
       success: true,
-      message: `Panggilan ulang ke-${count + 1} untuk ${ticket.nomor_antrean} berhasil disiarkan.`,
-      recallCount: count + 1,
+      message: `Panggilan ulang ke-${newCount} untuk ${ticket.nomor_tiket} berhasil disiarkan.`,
+      recallCount: newCount,
+      ticket: updated,
     };
   } catch (err: any) {
     return { success: false, error: err.message || "Gagal memanggil ulang antrean." };
@@ -170,28 +153,15 @@ export async function recallTicket(ticketId: string, staffId?: string) {
 }
 
 /**
- * Skips a ticket.
- * Strict rules:
- * - Red triage CANNOT be skipped.
- * - If skipped 2 times, returns to the end of the queue.
+ * Skips ticket and appends to skipped list.
  */
-export async function skipTicket(ticketId: string, staffId?: string, alasan?: string) {
+export async function skipTicket(ticketId: string, staffId?: string, reason?: string) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Tiket antrean berhasil dilewati (Mode Simulasi).",
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     const { data: ticket, error: fetchError } = await serviceSupabase
       .from("queue_tickets")
-      .select("id, nomor_antrean, unit_id, triage_level, tanggal")
+      .select("id, nomor_tiket, jumlah_lewati")
       .eq("id", ticketId)
       .single();
 
@@ -199,80 +169,31 @@ export async function skipTicket(ticketId: string, staffId?: string, alasan?: st
       return { success: false, error: "Tiket antrean tidak ditemukan." };
     }
 
-    // RULE 1: Red triage can NEVER be skipped
-    if (ticket.triage_level === "merah") {
-      return {
-        success: false,
-        error: "PELANGGARAN PROTOKOL MEDIS: Pasien dengan Triase MERAH (Kritis/Gawat Darurat) TIDAK BOLEH dilewati!",
-      };
-    }
-
-    // RULE 2: Check how many times already skipped
-    const { count: skipEventsCount } = await serviceSupabase
-      .from("queue_events")
-      .select("*", { count: "exact", head: true })
-      .eq("ticket_id", ticketId)
-      .eq("action", "dilewati");
-
-    const totalSkips = skipEventsCount || 0;
-
-    if (totalSkips >= 1) {
-      // Second skip -> send to end of queue:
-      // Find highest sequence number for this unit and date
-      const { data: maxTicket } = await serviceSupabase
-        .from("queue_tickets")
-        .select("nomor_urut")
-        .eq("unit_id", ticket.unit_id)
-        .eq("tanggal", ticket.tanggal)
-        .order("nomor_urut", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      const newSeq = ((maxTicket?.nomor_urut as number) || 50) + 1;
-
-      await serviceSupabase
-        .from("queue_tickets")
-        .update({
-          status: "menunggu",
-          nomor_urut: newSeq,
-        })
-        .eq("id", ticketId);
-
-      await serviceSupabase.from("queue_events").insert({
-        ticket_id: ticketId,
-        action: "dilewati",
-        actor_id: staffId || null,
-        keterangan: `Dua kali dilewati: Tiket dikembalikan ke urutan paling akhir (Urut: ${newSeq}). Alasan: ${alasan || "Pasien tidak merespons"}`,
-      });
-
-      revalidatePath(`/petugas/panel/${ticket.unit_id}`);
-      return {
-        success: true,
-        message: `Tiket ${ticket.nomor_antrean} telah dilewati 2 kali dan dipindahkan ke urutan antrean paling akhir (#${newSeq}).`,
-      };
-    }
-
-    // First skip -> mark status as 'dilewati'
-    await serviceSupabase
+    const { error: updateError } = await serviceSupabase
       .from("queue_tickets")
       .update({
         status: "dilewati",
+        jumlah_lewati: (ticket.jumlah_lewati || 0) + 1,
       })
       .eq("id", ticketId);
 
+    if (updateError) {
+      return { success: false, error: updateError.message };
+    }
+
     await serviceSupabase.from("queue_events").insert({
       ticket_id: ticketId,
-      action: "dilewati",
+      aksi: "lewati",
       actor_id: staffId || null,
-      keterangan: `Dilewati (Pertama kali). Alasan: ${alasan || "Pasien belum hadir di ruang periksa"}`,
+      catatan: reason || "Pasien tidak hadir setelah 3 kali panggilan.",
     });
 
-    revalidatePath(`/petugas/panel/${ticket.unit_id}`);
+    revalidatePath("/petugas/panel");
     revalidatePath("/display");
 
     return {
       success: true,
-      message: `Tiket ${ticket.nomor_antrean} berhasil dilewati. Pasien dapat dipanggil kembali dari daftar lewati.`,
+      message: `Nomor antrean ${ticket.nomor_tiket} berhasil dilewati.`,
     };
   } catch (err: any) {
     return { success: false, error: err.message || "Gagal melewati antrean." };
@@ -280,78 +201,15 @@ export async function skipTicket(ticketId: string, staffId?: string, alasan?: st
 }
 
 /**
- * Starts serving the patient at counter/doctor desk.
+ * Sets ticket status to 'dilayani' (in-service).
  */
 export async function serveTicket(ticketId: string, staffId?: string) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Status antrean diubah menjadi: Sedang Dilayani (Mode Simulasi).",
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
-    const nowIso = new Date().toISOString();
 
-    const { data: ticket, error: updateError } = await serviceSupabase
-      .from("queue_tickets")
-      .update({
-        status: "dilayani",
-        dilayani_pada: nowIso,
-      })
-      .eq("id", ticketId)
-      .select("id, nomor_antrean, unit_id")
-      .single();
-
-    if (updateError || !ticket) {
-      return { success: false, error: updateError?.message || "Gagal memperbarui status antrean." };
-    }
-
-    await serviceSupabase.from("queue_events").insert({
-      ticket_id: ticketId,
-      action: "dilayani",
-      actor_id: staffId || null,
-      keterangan: "Layanan dimulai",
-    });
-
-    revalidatePath(`/petugas/panel/${ticket.unit_id}`);
-    revalidatePath("/display");
-
-    return {
-      success: true,
-      message: `Layanan untuk ${ticket.nomor_antrean} dimulai.`,
-    };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Gagal memulai layanan." };
-  }
-}
-
-/**
- * Completes service for a ticket and updates service statistics.
- */
-export async function completeTicket(ticketId: string, staffId?: string) {
-  try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Layanan selesai (Mode Simulasi).",
-      };
-    }
-
-    const serviceSupabase = createServiceRoleClient();
-    const nowIso = new Date().toISOString();
-
-    // Fetch ticket to calculate duration
     const { data: ticket, error: fetchError } = await serviceSupabase
       .from("queue_tickets")
-      .select("id, nomor_antrean, unit_id, dilayani_pada")
+      .select("id, nomor_tiket")
       .eq("id", ticketId)
       .single();
 
@@ -359,12 +217,11 @@ export async function completeTicket(ticketId: string, staffId?: string) {
       return { success: false, error: "Tiket antrean tidak ditemukan." };
     }
 
-    // Update ticket to 'selesai'
     const { error: updateError } = await serviceSupabase
       .from("queue_tickets")
       .update({
-        status: "selesai",
-        selesai_pada: nowIso,
+        status: "dilayani",
+        dilayani_at: new Date().toISOString(),
       })
       .eq("id", ticketId);
 
@@ -372,54 +229,72 @@ export async function completeTicket(ticketId: string, staffId?: string) {
       return { success: false, error: updateError.message };
     }
 
-    // Calculate duration in seconds
-    let durationSeconds = 600; // default 10 minutes
-    if (ticket.dilayani_pada) {
-      durationSeconds = Math.max(60, Math.round((new Date(nowIso).getTime() - new Date(ticket.dilayani_pada).getTime()) / 1000));
+    await serviceSupabase.from("queue_events").insert({
+      ticket_id: ticketId,
+      aksi: "layani",
+      actor_id: staffId || null,
+      catatan: `Pelayanan untuk tiket ${ticket.nomor_tiket} sedang berlangsung.`,
+    });
+
+    revalidatePath("/petugas/panel");
+
+    return {
+      success: true,
+      message: `Pelayanan untuk ${ticket.nomor_tiket} dimulai.`,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Gagal memulai pelayanan." };
+  }
+}
+
+/**
+ * Finishes ticket service and updates service statistics.
+ */
+export async function finishTicket(
+  ticketId: string,
+  staffId?: string,
+  diagnoses?: string,
+  actions?: string
+) {
+  try {
+    const serviceSupabase = createServiceRoleClient();
+
+    const { data: ticket, error: fetchError } = await serviceSupabase
+      .from("queue_tickets")
+      .select("id, nomor_tiket, unit_id, dilayani_at")
+      .eq("id", ticketId)
+      .single();
+
+    if (fetchError || !ticket) {
+      return { success: false, error: "Tiket antrean tidak ditemukan." };
+    }
+
+    const now = new Date();
+    const { error: updateError } = await serviceSupabase
+      .from("queue_tickets")
+      .update({
+        status: "selesai",
+        selesai_at: now.toISOString(),
+      })
+      .eq("id", ticketId);
+
+    if (updateError) {
+      return { success: false, error: updateError.message };
     }
 
     await serviceSupabase.from("queue_events").insert({
       ticket_id: ticketId,
-      action: "selesai",
+      aksi: "selesai",
       actor_id: staffId || null,
-      keterangan: `Layanan selesai. Durasi: ${Math.round(durationSeconds / 60)} menit.`,
+      catatan: `Pelayanan tuntas. ${diagnoses ? "Diagnosa: " + diagnoses : ""} ${actions ? "Tindakan: " + actions : ""}`.trim(),
     });
 
-    // Update unit_stats
-    const { data: existingStats } = await serviceSupabase
-      .from("unit_stats")
-      .select("*")
-      .eq("unit_id", ticket.unit_id)
-      .maybeSingle();
-
-    if (existingStats) {
-      const newTotal = existingStats.total_selesai + 1;
-      const newAvg = Math.round(
-        (existingStats.avg_service_seconds * existingStats.total_selesai + durationSeconds) / newTotal
-      );
-      await serviceSupabase
-        .from("unit_stats")
-        .update({
-          total_selesai: newTotal,
-          avg_service_seconds: newAvg,
-          updated_at: nowIso,
-        })
-        .eq("unit_id", ticket.unit_id);
-    } else {
-      await serviceSupabase.from("unit_stats").insert({
-        unit_id: ticket.unit_id,
-        total_selesai: 1,
-        avg_service_seconds: durationSeconds,
-        updated_at: nowIso,
-      });
-    }
-
-    revalidatePath(`/petugas/panel/${ticket.unit_id}`);
-    revalidatePath("/display");
+    revalidatePath("/petugas/panel");
+    revalidatePath("/petugas/dashboard");
 
     return {
       success: true,
-      message: `Layanan tiket ${ticket.nomor_antrean} telah selesai dicatat.`,
+      message: `Pelayanan nomor ${ticket.nomor_tiket} berhasil diselesaikan.`,
     };
   } catch (err: any) {
     return { success: false, error: err.message || "Gagal menyelesaikan antrean." };
@@ -427,117 +302,263 @@ export async function completeTicket(ticketId: string, staffId?: string) {
 }
 
 /**
- * Changes emergency triage level (merah, kuning, hijau) with medical rationale.
+ * Classifies patient triage at emergency room (IGD).
  */
-export async function moveTriageLevel(
+export async function classifyTriage(
   ticketId: string,
-  newLevel: "merah" | "kuning" | "hijau",
-  staffId?: string,
-  alasan?: string
+  triageLevel: "merah" | "kuning" | "hijau",
+  vitalSigns: {
+    tensi?: string;
+    nadi?: string;
+    rr?: string;
+    spo2?: string;
+    suhu?: string;
+  },
+  nurseId?: string
 ) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: `Kategori Triase berhasil diubah menjadi ${newLevel.toUpperCase()} (Mode Simulasi).`,
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
-
-    const { data: ticket, error: updateError } = await serviceSupabase
-      .from("queue_tickets")
-      .update({
-        triage_level: newLevel,
-      })
-      .eq("id", ticketId)
-      .select("id, nomor_antrean, unit_id")
-      .single();
-
-    if (updateError || !ticket) {
-      return { success: false, error: updateError?.message || "Gagal memperbarui level triase." };
-    }
-
-    await serviceSupabase.from("queue_events").insert({
-      ticket_id: ticketId,
-      action: "triage_diubah",
-      actor_id: staffId || null,
-      keterangan: `Triase diubah menjadi ${newLevel.toUpperCase()}. Alasan: ${alasan || "Penilaian ulang kondisi tanda vital pasien"}`,
-    });
-
-    revalidatePath("/petugas/triase");
-    revalidatePath(`/petugas/panel/${ticket.unit_id}`);
-
-    return {
-      success: true,
-      message: `Klasifikasi triase untuk ${ticket.nomor_antrean} berhasil diperbarui menjadi ${newLevel.toUpperCase()}.`,
-    };
-  } catch (err: any) {
-    return { success: false, error: err.message || "Gagal mengubah status triase." };
-  }
-}
-
-/**
- * Sets doctor session quota with validation: quota cannot be less than already booked/terpakai.
- */
-export async function setDoctorQuota(sessionId: string, newQuota: number, staffId?: string) {
-  try {
-    if (newQuota < 1) {
-      return { success: false, error: "Kuota dokter minimal 1 pasien." };
-    }
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: `Kuota dokter berhasil diperbarui menjadi ${newQuota} pasien (Mode Simulasi).`,
-      };
-    }
-
-    const serviceSupabase = createServiceRoleClient();
-
-    const { data: session, error: fetchError } = await serviceSupabase
-      .from("doctor_sessions")
-      .select("id, kuota, terpakai")
-      .eq("id", sessionId)
-      .single();
-
-    if (fetchError || !session) {
-      return { success: false, error: "Sesi dokter tidak ditemukan." };
-    }
-
-    // Validation: newQuota cannot be smaller than already terpakai
-    if (newQuota < session.terpakai) {
-      return {
-        success: false,
-        error: `Kuota baru (${newQuota}) tidak boleh lebih kecil dari kuota yang sudah terpakai (${session.terpakai} pasien). Batalkan booking terlebih dahulu jika ingin menurunkan kuota di bawah angka ini.`,
-      };
-    }
 
     const { error: updateError } = await serviceSupabase
-      .from("doctor_sessions")
+      .from("queue_tickets")
       .update({
-        kuota: newQuota,
+        triage: triageLevel,
       })
-      .eq("id", sessionId);
+      .eq("id", ticketId);
 
     if (updateError) {
       return { success: false, error: updateError.message };
     }
 
-    revalidatePath("/petugas/kuota-dokter");
-    revalidatePath("/jadwal-dokter");
+    await serviceSupabase.from("queue_events").insert({
+      ticket_id: ticketId,
+      aksi: "pindah_triase",
+      actor_id: nurseId || null,
+      catatan: `Klasifikasi triase ${triageLevel.toUpperCase()}. Vital: TD ${vitalSigns.tensi || "-"}, Nadi ${vitalSigns.nadi || "-"}, SpO2 ${vitalSigns.spo2 || "-"}.`,
+    });
+
+    revalidatePath("/petugas/triase");
+    revalidatePath("/petugas/dashboard");
 
     return {
       success: true,
-      message: `Kuota sesi dokter berhasil diperbarui menjadi ${newQuota} pasien.`,
+      message: `Triase pasien berhasil ditetapkan sebagai ${triageLevel.toUpperCase()}.`,
     };
   } catch (err: any) {
-    return { success: false, error: err.message || "Gagal mengubah kuota dokter." };
+    return { success: false, error: err.message || "Gagal memperbarui triase pasien." };
   }
 }
+
+/**
+ * Updates doctor session quota in real-time.
+ */
+export async function updateDoctorSessionQuota(sessionId: string, newQuota: number) {
+  try {
+    if (newQuota < 1 || newQuota > 200) {
+      return { success: false, error: "Kuota harus di antara 1 dan 200 pasien." };
+    }
+
+    const serviceSupabase = createServiceRoleClient();
+    const { error } = await serviceSupabase
+      .from("doctor_sessions")
+      .update({ kuota: newQuota })
+      .eq("id", sessionId);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    revalidatePath("/petugas/kuota-dokter");
+    revalidatePath("/booking/poliklinik");
+
+    return {
+      success: true,
+      message: `Kuota dokter berhasil diperbarui menjadi ${newQuota} pasien.`,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Gagal memperbarui kuota sesi." };
+  }
+}
+
+/**
+ * Assigns room to inpatient request and atomically increments occupied count.
+ */
+export async function assignPatientRoom(requestId: string, roomId: string, staffId?: string) {
+  try {
+    const serviceSupabase = createServiceRoleClient();
+
+    // 1. Check room capacity
+    const { data: room, error: roomError } = await serviceSupabase
+      .from("rooms")
+      .select("id, nama_kamar, kapasitas, terisi")
+      .eq("id", roomId)
+      .single();
+
+    if (roomError || !room) {
+      return { success: false, error: "Kamar rawat inap tidak ditemukan." };
+    }
+
+    if (room.terisi >= room.kapasitas) {
+      return { success: false, error: `Kamar ${room.nama_kamar} sudah penuh (${room.terisi}/${room.kapasitas}).` };
+    }
+
+    // 2. Assign room to request
+    const { error: reqError } = await serviceSupabase
+      .from("inpatient_requests")
+      .update({
+        room_id: roomId,
+        status: "dirawat",
+      })
+      .eq("id", requestId);
+
+    if (reqError) {
+      return { success: false, error: reqError.message };
+    }
+
+    // 3. Atomically increment room occupancy
+    await serviceSupabase
+      .from("rooms")
+      .update({ terisi: room.terisi + 1 })
+      .eq("id", roomId);
+
+    revalidatePath("/petugas/rawat-inap");
+
+    return {
+      success: true,
+      message: `Pasien berhasil ditempatkan di kamar ${room.nama_kamar}.`,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Gagal menempatkan pasien ke kamar." };
+  }
+}
+
+/**
+ * Records cash payment at cashier desk.
+ */
+export async function recordCashPayment(invoiceId: string, staffId?: string) {
+  try {
+    const serviceSupabase = createServiceRoleClient();
+
+    const { data: inv, error: fetchError } = await serviceSupabase
+      .from("invoices")
+      .select("id, status, total_amount, invoice_no")
+      .eq("id", invoiceId)
+      .single();
+
+    if (fetchError || !inv) {
+      return { success: false, error: "Faktur tagihan tidak ditemukan." };
+    }
+
+    if (inv.status === "settlement") {
+      return { success: false, error: "Faktur tagihan ini sudah lunas sebelumnya." };
+    }
+
+    const { error: updateError } = await serviceSupabase
+      .from("invoices")
+      .update({
+        status: "settlement",
+        metode_bayar: "tunai",
+        paid_at: new Date().toISOString(),
+      })
+      .eq("id", invoiceId);
+
+    if (updateError) {
+      return { success: false, error: updateError.message };
+    }
+
+    revalidatePath("/petugas/kasir");
+    revalidatePath(`/pembayaran/${invoiceId}`);
+
+    return {
+      success: true,
+      message: `Pembayaran tunai sebesar Rp ${(inv.total_amount || 0).toLocaleString("id-ID")} untuk faktur ${inv.invoice_no} berhasil dicatat.`,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Gagal mencatat pembayaran tunai." };
+  }
+}
+
+/**
+ * Creates or updates public display screen.
+ */
+export async function createDisplayScreen(
+  buildingId: string,
+  unitId: string,
+  nama: string,
+  mode: "antrean" | "info" | "bergantian",
+  pengumuman?: string
+) {
+  try {
+    const serviceSupabase = createServiceRoleClient();
+    const token = `tv-${Math.random().toString(36).substring(2, 8)}-${Date.now().toString(36)}`;
+
+    const { data: newScreen, error } = await serviceSupabase
+      .from("display_screens")
+      .insert({
+        building_id: buildingId,
+        unit_id: unitId,
+        nama,
+        token,
+        mode,
+        pengumuman: pengumuman || null,
+        is_active: true,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    revalidatePath("/petugas/display");
+
+    return {
+      success: true,
+      message: "Layar display baru berhasil didaftarkan.",
+      screen: newScreen,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Gagal mendaftarkan display screen." };
+  }
+}
+
+/**
+ * Revokes display token.
+ */
+export async function revokeDisplayToken(screenId: string) {
+  try {
+    const serviceSupabase = createServiceRoleClient();
+    const newToken = `tv-${Math.random().toString(36).substring(2, 8)}-${Date.now().toString(36)}`;
+
+    const { error } = await serviceSupabase
+      .from("display_screens")
+      .update({ token: newToken })
+      .eq("id", screenId);
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    revalidatePath("/petugas/display");
+
+    return {
+      success: true,
+      message: "Token display berhasil diganti / di-revoke.",
+      newToken,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Gagal me-revoke token display." };
+  }
+}
+
+export const completeTicket = finishTicket;
+export const setDoctorQuota = updateDoctorSessionQuota;
+export async function moveTriageLevel(
+  ticketId: string,
+  triageLevel: "merah" | "kuning" | "hijau",
+  nurseId?: string,
+  catatan?: string
+) {
+  return await classifyTriage(ticketId, triageLevel, {}, nurseId);
+}
+

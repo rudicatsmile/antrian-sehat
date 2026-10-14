@@ -46,25 +46,6 @@ export async function createPatient(data: PatientFormData) {
     const normalizedPhone = await normalizeIndonesianPhone(noWhatsapp);
     const assignedNoRm = isPasienLama && manualRm && manualRm.trim() ? manualRm.trim() : await generateNoRm();
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Data pasien berhasil didaftarkan (Mode Simulasi).",
-        noRm: assignedNoRm,
-        patient: {
-          id: "mock-patient-" + Date.now(),
-          nik,
-          nama_lengkap: namaLengkap,
-          no_whatsapp: normalizedPhone,
-          no_rm: assignedNoRm,
-          kategori_prioritas: kategoriPrioritas,
-        },
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     // Check if NIK already registered
@@ -110,7 +91,7 @@ export async function createPatient(data: PatientFormData) {
 
     return {
       success: true,
-      message: "Pendaftaran pasien baru berhasil.",
+      message: "Pendaftaran pasien baru berhasil tersimpan di database.",
       noRm: assignedNoRm,
       patient: newPatient,
     };
@@ -134,16 +115,6 @@ export async function updatePatient(
   }
 ) {
   try {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const isMock = !supabaseUrl || supabaseUrl.includes("mock.supabase.co");
-
-    if (isMock) {
-      return {
-        success: true,
-        message: "Pembaruan data pasien berhasil disimpan (Mode Simulasi).",
-      };
-    }
-
     const serviceSupabase = createServiceRoleClient();
 
     // Fetch existing profile to compute diff
@@ -263,3 +234,39 @@ export async function uploadPriorityDocument(payload: {
     dokumen_prioritas_path: payload.documentPath,
   });
 }
+
+export async function searchPatientByNik(nik: string) {
+  try {
+    const serviceSupabase = createServiceRoleClient();
+    const { data: patient, error } = await serviceSupabase
+      .from("profiles")
+      .select("id, nik, nama_lengkap, no_rm, tanggal_lahir, alamat, no_whatsapp, jenis_kelamin, kategori_prioritas")
+      .eq("nik", nik)
+      .maybeSingle();
+
+    if (error) {
+      return { success: false, error: error.message };
+    }
+
+    if (!patient) {
+      return { success: false, error: "Pasien dengan NIK tersebut belum terdaftar dalam sistem." };
+    }
+
+    return {
+      success: true,
+      patient: {
+        id: patient.id,
+        nik: patient.nik,
+        nama: patient.nama_lengkap,
+        noRm: patient.no_rm,
+        tglLahir: patient.tanggal_lahir || "-",
+        alamat: patient.alamat || "-",
+        noWhatsapp: patient.no_whatsapp,
+        kategoriPrioritas: patient.kategori_prioritas,
+      },
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Gagal mencari data pasien." };
+  }
+}
+
